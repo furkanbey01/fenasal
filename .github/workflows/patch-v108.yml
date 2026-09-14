@@ -1,4 +1,4 @@
-name: Apply v1.0.8 Fixes
+name: Apply countdown fixes
 
 on:
   push:
@@ -17,18 +17,17 @@ jobs:
 
       - name: Apply source fixes
         run: |
-          python tools/patch_v108.py
-          python tools/fix_v108_escape.py
+          python tools/patch_last_second.py
 
       - name: Commit source fixes
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add app/src/main/java/com/fenasal/app/ProjectionService.java app/src/main/java/com/fenasal/app/TargetOverlayView.java
+          git add app/src/main/java/com/fenasal/app/ProjectionService.java
           if git diff --cached --quiet; then
             echo "No source changes needed"
             exit 0
           fi
           git diff --cached --check
-          git commit -m "Fix countdown regex escape"
+          git commit -m "Tap only on confirmed one-second countdown"
           git push
