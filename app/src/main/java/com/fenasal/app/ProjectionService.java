@@ -638,7 +638,7 @@ public class ProjectionService extends Service {
 
         // The game counts 15 -> 0. Parse the whole OCR line only. This prevents
         // "12" from being interpreted as the separate element "2".
-        String s = raw == null ? "" : raw.trim().replaceAll("\s+", "");
+        String s = raw == null ? "" : raw.trim().replaceAll("\\s+", "");
         if (!s.matches("^(?:1[0-5]|[0-9])$")) return current;
 
         try {
