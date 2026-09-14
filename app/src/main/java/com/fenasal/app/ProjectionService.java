@@ -410,7 +410,7 @@ public class ProjectionService extends Service {
                 min >= 0 && lastEmpty[min],
                 displayValues,
                 remaining,
-                lastFive,
+                true,
                 false);
 
         boolean accessibility = TapAccessibilityService.isReady();
