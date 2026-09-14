@@ -81,6 +81,8 @@ public class ProjectionService extends Service {
     private long countdownBaseTime;
     private boolean betPlaced;
     private long lastTapTime;
+    private Integer lastCountdownObserved;
+    private long lastCountdownObservedAt;
 
     private int lastLoggedSecond = -99;
     private String lastPlan = "";
@@ -301,8 +303,6 @@ public class ProjectionService extends Service {
                         foundY[eAnchor] = ey;
                     }
 
-                    frameCountdown = chooseCountdown(frameCountdown, eraw, ex, ey);
-
                     float eAmountY = labelY - AMOUNT_ABOVE_LABEL;
                     if (Math.abs(ey - eAmountY) <= 0.020f) {
                         int index = nearestTarget(ex);
@@ -415,8 +415,8 @@ public class ProjectionService extends Service {
         boolean accessibility = TapAccessibilityService.isReady();
         if (!betPlaced
                 && lastFive
-                && remaining <= 2.00d
-                && remaining >= 0.45d
+                && remaining <= 2.15d
+                && remaining >= 1.10d
                 && freshCount == 3
                 && max >= 0
                 && min >= 0
@@ -455,29 +455,49 @@ public class ProjectionService extends Service {
 
     private void updateCountdown(int value, long now) {
         double before = estimatedRemaining(now);
+        boolean firstReading = countdownBase == null;
+        long gap = lastCountdownObservedAt == 0L
+                ? Long.MAX_VALUE
+                : now - lastCountdownObservedAt;
 
-        boolean newRound = value >= 4
-                && (countdownBase == null
-                || before < 2.2d
-                || betPlaced
-                || now - countdownBaseTime > 5000L);
+        // New round is credible only when the timer jumps back to 10..15 after
+        // the previous round ended or there was a real gap. 4/5 never reset a bet.
+        boolean newRound = !firstReading
+                && value >= 10
+                && (gap > 3000L
+                    || (lastCountdownObserved != null && lastCountdownObserved <= 3))
+                && (lastTapTime == 0L || now - lastTapTime > 2500L);
 
-        if (newRound) {
-            betPlaced = false;
-            lastTapTime = 0L;
-            EventLog.log(this, "ROUND_START | geri sayım=" + value);
-        }
+        if (!firstReading && !newRound && lastCountdownObserved != null) {
+            // Timer must count downward inside one round. Reject impossible jumps.
+            if (value > lastCountdownObserved + 1) {
+                EventLog.log(this, "COUNTDOWN_REJECT_UP | OCR=" + value
+                        + " previous=" + lastCountdownObserved);
+                return;
+            }
 
-        if (!newRound && before >= 0d && before <= 5.5d) {
-            if (Math.abs(value - before) > 1.8d) {
+            // Be stricter in the final seconds so a bad OCR sample cannot cause
+            // an early or duplicate tap.
+            if (before >= 0d && before <= 5.5d && Math.abs(value - before) > 1.8d) {
                 EventLog.log(this, String.format(Locale.ROOT,
                         "COUNTDOWN_REJECT | OCR=%d tahmin=%.2f", value, before));
                 return;
             }
         }
 
+        if (firstReading) {
+            betPlaced = false;
+            EventLog.log(this, "ROUND_SYNC | geri sayım=" + value);
+        } else if (newRound) {
+            betPlaced = false;
+            lastTapTime = 0L;
+            EventLog.log(this, "ROUND_START | geri sayım=" + value);
+        }
+
         countdownBase = value;
         countdownBaseTime = now;
+        lastCountdownObserved = value;
+        lastCountdownObservedAt = now;
 
         if (value != lastLoggedSecond) {
             lastLoggedSecond = value;
@@ -615,11 +635,18 @@ public class ProjectionService extends Service {
         if (cx < 0.535f || cx > 0.650f || cy < 0.525f || cy > 0.575f) {
             return current;
         }
-        String s = raw.replaceAll("[^0-9]", "");
-        if (s.length() != 1) return current;
-        int v = s.charAt(0) - '0';
-        if (v < 1 || v > 5) return current;
-        return v;
+
+        // The game counts 15 -> 0. Parse the whole OCR line only. This prevents
+        // "12" from being interpreted as the separate element "2".
+        String s = raw == null ? "" : raw.trim().replaceAll("\s+", "");
+        if (!s.matches("^(?:1[0-5]|[0-9])$")) return current;
+
+        try {
+            int v = Integer.parseInt(s);
+            return (v >= 0 && v <= 15) ? v : current;
+        } catch (NumberFormatException ignored) {
+            return current;
+        }
     }
 
     private int anchorIndex(String raw) {

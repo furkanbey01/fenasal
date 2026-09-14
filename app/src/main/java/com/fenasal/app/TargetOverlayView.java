@@ -37,7 +37,7 @@ public class TargetOverlayView extends View {
         textPaint.setFakeBoldText(true);
 
         badgePaint.setStyle(Paint.Style.FILL);
-        badgePaint.setColor(0xD9000000);
+        badgePaint.setColor(0x99000000);
     }
 
     public void updateState(
@@ -94,8 +94,8 @@ public class TargetOverlayView extends View {
             return;
         }
 
-        int highColor = tapping ? 0xFFFFD54F : 0xFF33D17A;
-        int lowColor = tapping ? 0xFFFFD54F : 0xFF40C4FF;
+        int highColor = tapping ? 0xD9FFD54F : 0xB833D17A;
+        int lowColor = tapping ? 0xD9FFD54F : 0xB840C4FF;
 
         drawTarget(
                 canvas,
@@ -148,7 +148,7 @@ public class TargetOverlayView extends View {
                 bottom);
 
         strokePaint.setColor(color);
-        strokePaint.setStrokeWidth(dp(tapping ? 6 : 4));
+        strokePaint.setStrokeWidth(dp(tapping ? 5 : 3));
         canvas.drawRoundRect(rect, radius, radius, strokePaint);
 
         float badgePaddingX = dp(8);
@@ -166,7 +166,7 @@ public class TargetOverlayView extends View {
                 badgeLeft + labelWidth + badgePaddingX * 2,
                 rect.top + dp(8) + badgeHeight);
 
-        badgePaint.setColor(0xD9000000);
+        badgePaint.setColor(0x99000000);
         canvas.drawRoundRect(badge, dp(8), dp(8), badgePaint);
 
         textPaint.setColor(color);
@@ -196,7 +196,7 @@ public class TargetOverlayView extends View {
                 left + textWidth + padX * 2,
                 top + dp(32));
 
-        badgePaint.setColor(0xD9000000);
+        badgePaint.setColor(0x99000000);
         canvas.drawRoundRect(bg, dp(10), dp(10), badgePaint);
 
         strokePaint.setStrokeWidth(dp(2));
