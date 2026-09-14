@@ -46,7 +46,7 @@
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Oyun açıkken Fenasal, 1-12 / 13-24 / 25-36 miktarlarını okuyup geri sayımın sonunda en yüksek ve en düşük olana birer kez dokunur. Alttan hangi çipi seçtiysen onu kullanır."
+        android:text="Oyuna dönünce üstte sürüklenebilir Fenasal paneli görünür. Panel; OCR'nin kaç sayıyı okuduğunu, geri sayımı, en yüksek/en düşük seçimi ve tıklamayı düşündüğü PLAN'ı canlı gösterir. Panelin üstüne dokunarak küçültüp büyütebilirsin. Hata olursa hata mesajı da burada görünür."
         android:textSize="15sp"
         android:paddingTop="24dp" />
 </LinearLayout>
