@@ -1,52 +1,108 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:padding="24dp"
-    android:gravity="center_horizontal">
+    android:fillViewport="true">
 
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="FENASAL 😂"
-        android:textSize="28sp"
-        android:textStyle="bold"
-        android:layout_marginTop="24dp" />
-
-    <TextView
-        android:id="@+id/statusText"
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Durum: Hazır"
-        android:textSize="18sp"
-        android:paddingTop="24dp"
-        android:paddingBottom="24dp" />
+        android:orientation="vertical"
+        android:padding="20dp">
 
-    <Button
-        android:id="@+id/accessibilityButton"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="1. Erişilebilirlik iznini aç" />
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="FENASAL 😂"
+            android:textSize="28sp"
+            android:textStyle="bold"
+            android:layout_gravity="center_horizontal"
+            android:layout_marginTop="12dp" />
 
-    <Button
-        android:id="@+id/startButton"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="2. Otomatiği başlat"
-        android:layout_marginTop="12dp" />
+        <TextView
+            android:id="@+id/statusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Durum: Hazır"
+            android:textSize="17sp"
+            android:paddingTop="18dp"
+            android:paddingBottom="18dp" />
 
-    <Button
-        android:id="@+id/stopButton"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Durdur"
-        android:layout_marginTop="12dp" />
+        <Button
+            android:id="@+id/accessibilityButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="1. Erişilebilirlik iznini aç" />
 
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Oyuna dönünce üstte sürüklenebilir Fenasal paneli görünür. Panel; OCR'nin kaç sayıyı okuduğunu, geri sayımı, en yüksek/en düşük seçimi ve tıklamayı düşündüğü PLAN'ı canlı gösterir. Panelin üstüne dokunarak küçültüp büyütebilirsin. Hata olursa hata mesajı da burada görünür."
-        android:textSize="15sp"
-        android:paddingTop="24dp" />
-</LinearLayout>
+        <Button
+            android:id="@+id/startButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="2. Otomatiği başlat"
+            android:layout_marginTop="10dp" />
+
+        <Button
+            android:id="@+id/stopButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Durdur"
+            android:layout_marginTop="10dp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Son 5 saniyede oyun ekranının üstünde YÜKSEK ve DÜŞÜK/BOŞ seçenekler çerçeveyle işaretlenir. Son 2 saniyede iki hedefe otomatik dokunur. Ekran üstü panel, okunan değerleri ve planı canlı gösterir."
+            android:textSize="14sp"
+            android:paddingTop="18dp"
+            android:paddingBottom="16dp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="İşlem kayıtları"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="8dp">
+
+            <Button
+                android:id="@+id/refreshLogButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Yenile" />
+
+            <Button
+                android:id="@+id/copyLogButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Kopyala" />
+
+            <Button
+                android:id="@+id/clearLogButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Temizle" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/logText"
+            android:layout_width="match_parent"
+            android:layout_height="360dp"
+            android:layout_marginTop="10dp"
+            android:padding="10dp"
+            android:background="#141414"
+            android:textColor="#EAEAEA"
+            android:textSize="11sp"
+            android:fontFamily="monospace"
+            android:textIsSelectable="true"
+            android:text="Henüz kayıt yok." />
+
+    </LinearLayout>
+</ScrollView>

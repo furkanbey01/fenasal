@@ -21,8 +21,11 @@ public class TapAccessibilityService extends AccessibilityService {
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private WindowManager windowManager;
-    private TextView overlay;
-    private WindowManager.LayoutParams overlayParams;
+    private TextView bubble;
+    private TargetOverlayView markerView;
+    private WindowManager.LayoutParams bubbleParams;
+    private WindowManager.LayoutParams markerParams;
+
     private boolean expanded = true;
     private float downRawX;
     private float downRawY;
@@ -34,7 +37,8 @@ public class TapAccessibilityService extends AccessibilityService {
     protected void onServiceConnected() {
         super.onServiceConnected();
         instance = this;
-        showOverlay();
+        EventLog.log(this, "ACCESSIBILITY_START | Erişilebilirlik servisi bağlandı");
+        showOverlays();
         updateOverlay(lastStatus);
     }
 
@@ -42,11 +46,14 @@ public class TapAccessibilityService extends AccessibilityService {
     public void onAccessibilityEvent(AccessibilityEvent event) { }
 
     @Override
-    public void onInterrupt() { }
+    public void onInterrupt() {
+        EventLog.log(this, "ACCESSIBILITY_INTERRUPT | Android servisi kesintiye uğrattı");
+    }
 
     @Override
     public void onDestroy() {
-        removeOverlay();
+        EventLog.log(this, "ACCESSIBILITY_STOP | Erişilebilirlik servisi kapandı");
+        removeOverlays();
         if (instance == this) instance = null;
         super.onDestroy();
     }
@@ -63,128 +70,238 @@ public class TapAccessibilityService extends AccessibilityService {
         service.handler.post(() -> service.renderStatus(text));
     }
 
-    public static void tapNormalized(float xRatio, float yRatio) {
-        if (instance == null) return;
-        instance.tap(xRatio, yRatio, null);
+    public static void updateMarkers(
+            float[] centersX,
+            float boxTop,
+            float boxBottom,
+            int maxIndex,
+            int minIndex,
+            boolean minEmpty,
+            String[] values,
+            double remaining,
+            boolean active,
+            boolean tapping) {
+
+        TapAccessibilityService service = instance;
+        if (service == null || service.markerView == null) return;
+        service.handler.post(() -> service.markerView.updateState(
+                centersX,
+                boxTop,
+                boxBottom,
+                maxIndex,
+                minIndex,
+                minEmpty,
+                values,
+                remaining,
+                active,
+                tapping));
     }
 
-    public static void tapPair(float firstX, float secondX, float yRatio) {
+    public static void clearMarkers() {
+        TapAccessibilityService service = instance;
+        if (service == null || service.markerView == null) return;
+        service.handler.post(service.markerView::clearState);
+    }
+
+    public static void tapPair(
+            float firstX,
+            float secondX,
+            float yRatio,
+            String firstLabel,
+            String secondLabel) {
+
         TapAccessibilityService service = instance;
         if (service == null) return;
-        service.tap(firstX, yRatio, null);
-        service.handler.postDelayed(() -> service.tap(secondX, yRatio, null), 180);
+
+        EventLog.log(service,
+                "GESTURE_PAIR | 1=" + firstLabel + " 2=" + secondLabel +
+                        " | x=" + firstX + "," + secondX + " y=" + yRatio);
+
+        service.tap(firstX, yRatio, firstLabel);
+        service.handler.postDelayed(
+                () -> service.tap(secondX, yRatio, secondLabel),
+                220L);
     }
 
-    private void showOverlay() {
-        if (overlay != null) return;
+    private void showOverlays() {
+        if (bubble != null) return;
         windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
 
-        overlay = new TextView(this);
-        overlay.setTextColor(Color.WHITE);
-        overlay.setTextSize(12f);
-        overlay.setPadding(dp(10), dp(8), dp(10), dp(8));
-        overlay.setMinWidth(dp(205));
-        overlay.setMaxWidth(dp(285));
-        overlay.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+        markerView = new TargetOverlayView(this);
+        markerParams = new WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                        | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                        | WindowManager.LayoutParams.FLAG_SECURE,
+                PixelFormat.TRANSLUCENT);
+        markerParams.gravity = Gravity.TOP | Gravity.START;
+
+        bubble = new TextView(this);
+        bubble.setTextColor(Color.WHITE);
+        bubble.setTextSize(12f);
+        bubble.setPadding(dp(10), dp(8), dp(10), dp(8));
+        bubble.setMinWidth(dp(205));
+        bubble.setMaxWidth(dp(300));
+        bubble.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
 
         GradientDrawable bg = new GradientDrawable();
         bg.setColor(0xE61B1B1F);
         bg.setCornerRadius(dp(14));
         bg.setStroke(dp(1), 0xFF7C4DFF);
-        overlay.setBackground(bg);
+        bubble.setBackground(bg);
 
-        overlayParams = new WindowManager.LayoutParams(
+        bubbleParams = new WindowManager.LayoutParams(
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE |
-                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                        | WindowManager.LayoutParams.FLAG_SECURE,
                 PixelFormat.TRANSLUCENT);
-        overlayParams.gravity = Gravity.TOP | Gravity.START;
+        bubbleParams.gravity = Gravity.TOP | Gravity.START;
 
         DisplayMetrics dm = new DisplayMetrics();
         windowManager.getDefaultDisplay().getRealMetrics(dm);
-        overlayParams.x = Math.max(dp(8), dm.widthPixels - dp(295));
-        overlayParams.y = dp(78);
+        bubbleParams.x = Math.max(dp(8), dm.widthPixels - dp(310));
+        bubbleParams.y = dp(82);
 
-        overlay.setOnTouchListener((v, event) -> {
-            if (overlayParams == null || windowManager == null) return false;
+        bubble.setOnTouchListener((v, event) -> {
+            if (bubbleParams == null || windowManager == null) return false;
+
             switch (event.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
                     downRawX = event.getRawX();
                     downRawY = event.getRawY();
-                    downX = overlayParams.x;
-                    downY = overlayParams.y;
+                    downX = bubbleParams.x;
+                    downY = bubbleParams.y;
                     moved = false;
                     return true;
+
                 case MotionEvent.ACTION_MOVE:
                     int dx = Math.round(event.getRawX() - downRawX);
                     int dy = Math.round(event.getRawY() - downRawY);
                     if (Math.abs(dx) > dp(5) || Math.abs(dy) > dp(5)) moved = true;
+
                     DisplayMetrics metrics = new DisplayMetrics();
                     windowManager.getDefaultDisplay().getRealMetrics(metrics);
-                    overlayParams.x = clamp(downX + dx, 0, Math.max(0, metrics.widthPixels - dp(70)));
-                    overlayParams.y = clamp(downY + dy, 0, Math.max(0, metrics.heightPixels - dp(70)));
-                    windowManager.updateViewLayout(overlay, overlayParams);
+                    bubbleParams.x = clamp(
+                            downX + dx,
+                            0,
+                            Math.max(0, metrics.widthPixels - dp(70)));
+                    bubbleParams.y = clamp(
+                            downY + dy,
+                            0,
+                            Math.max(0, metrics.heightPixels - dp(70)));
+                    windowManager.updateViewLayout(bubble, bubbleParams);
                     return true;
+
                 case MotionEvent.ACTION_UP:
                     if (!moved) {
                         expanded = !expanded;
                         renderStatus(lastStatus);
                     }
                     return true;
+
                 default:
                     return true;
             }
         });
 
         try {
-            windowManager.addView(overlay, overlayParams);
-        } catch (Exception ignored) { }
+            windowManager.addView(markerView, markerParams);
+            windowManager.addView(bubble, bubbleParams);
+        } catch (Exception e) {
+            EventLog.log(this, "ERROR | OVERLAY_ADD | " + shortError(e));
+        }
     }
 
     private void renderStatus(String text) {
-        if (overlay == null) return;
+        if (bubble == null) return;
+
         if (expanded) {
-            overlay.setMinWidth(dp(205));
-            overlay.setText(text + "\nDokun: küçült • Sürükle: taşı");
+            bubble.setMinWidth(dp(205));
+            bubble.setText(text + "\nDokun: küçült • Sürükle: taşı");
         } else {
-            overlay.setMinWidth(dp(54));
+            bubble.setMinWidth(dp(52));
             String firstLine = text;
             int newline = text.indexOf('\n');
             if (newline > 0) firstLine = text.substring(0, newline);
-            overlay.setText("F • " + firstLine.replace("FENASAL • ", ""));
+            firstLine = firstLine.replace("FENASAL • ", "");
+            bubble.setText("F • " + firstLine);
         }
     }
 
-    private void removeOverlay() {
-        if (windowManager != null && overlay != null) {
-            try {
-                windowManager.removeView(overlay);
-            } catch (Exception ignored) { }
+    private void removeOverlays() {
+        if (windowManager != null) {
+            if (bubble != null) {
+                try {
+                    windowManager.removeView(bubble);
+                } catch (Exception ignored) { }
+            }
+            if (markerView != null) {
+                try {
+                    windowManager.removeView(markerView);
+                } catch (Exception ignored) { }
+            }
         }
-        overlay = null;
-        overlayParams = null;
+        bubble = null;
+        markerView = null;
+        bubbleParams = null;
+        markerParams = null;
     }
 
     private void tap(float xRatio, float yRatio, String label) {
         WindowManager wm = (WindowManager) getSystemService(WINDOW_SERVICE);
         DisplayMetrics dm = new DisplayMetrics();
         wm.getDefaultDisplay().getRealMetrics(dm);
+
         float x = dm.widthPixels * xRatio;
         float y = dm.heightPixels * yRatio;
 
         Path path = new Path();
         path.moveTo(x, y);
-        GestureDescription.StrokeDescription stroke = new GestureDescription.StrokeDescription(path, 0, 70);
-        GestureDescription gesture = new GestureDescription.Builder().addStroke(stroke).build();
-        dispatchGesture(gesture, new GestureResultCallback() {
-            @Override
-            public void onCancelled(GestureDescription gestureDescription) {
-                super.onCancelled(gestureDescription);
-                updateOverlay("FENASAL • DOKUNMA HATASI\nAndroid dokunma hareketini iptal etti.");
-            }
-        }, null);
+
+        GestureDescription.StrokeDescription stroke =
+                new GestureDescription.StrokeDescription(path, 0, 75);
+        GestureDescription gesture =
+                new GestureDescription.Builder().addStroke(stroke).build();
+
+        EventLog.log(this, String.format(
+                java.util.Locale.ROOT,
+                "GESTURE_SEND | %s | x=%.1f y=%.1f",
+                label, x, y));
+
+        boolean accepted = dispatchGesture(
+                gesture,
+                new GestureResultCallback() {
+                    @Override
+                    public void onCompleted(GestureDescription gestureDescription) {
+                        super.onCompleted(gestureDescription);
+                        EventLog.log(
+                                TapAccessibilityService.this,
+                                "GESTURE_OK | " + label);
+                    }
+
+                    @Override
+                    public void onCancelled(GestureDescription gestureDescription) {
+                        super.onCancelled(gestureDescription);
+                        EventLog.log(
+                                TapAccessibilityService.this,
+                                "GESTURE_CANCELLED | " + label);
+                        updateOverlay(
+                                "FENASAL • DOKUNMA HATASI\nAndroid hareketi iptal etti: " + label);
+                    }
+                },
+                null);
+
+        if (!accepted) {
+            EventLog.log(this, "GESTURE_REJECTED | " + label);
+            updateOverlay(
+                    "FENASAL • DOKUNMA HATASI\ndispatchGesture kabul etmedi: " + label);
+        }
     }
 
     private int dp(int value) {
@@ -193,5 +310,12 @@ public class TapAccessibilityService extends AccessibilityService {
 
     private static int clamp(int value, int min, int max) {
         return Math.max(min, Math.min(max, value));
+    }
+
+    private static String shortError(Throwable e) {
+        if (e == null) return "bilinmeyen hata";
+        String s = e.getMessage();
+        if (s == null || s.trim().isEmpty()) s = e.getClass().getSimpleName();
+        return s.length() > 120 ? s.substring(0, 120) : s;
     }
 }
