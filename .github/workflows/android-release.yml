@@ -33,11 +33,26 @@ jobs:
       - name: Prepare APK
         run: cp app/build/outputs/apk/debug/app-debug.apk Fenasal.apk
 
-      - name: Create GitHub Release
+      - name: Keep only v1.0.18 release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="v1.0.${{ github.run_number }}"
-          gh release create "$TAG" Fenasal.apk \
-            --title "Fenasal $TAG" \
-            --notes "Otomatik oluşturulan Android APK"
+          gh release list --limit 100 --json tagName --jq '.[].tagName' | while read -r tag; do
+            if [ -n "$tag" ] && [ "$tag" != "v1.0.18" ]; then
+              gh release delete "$tag" --cleanup-tag --yes || true
+            fi
+          done
+
+      - name: Update v1.0.18 APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git tag -f v1.0.18 "$GITHUB_SHA"
+          git push origin -f refs/tags/v1.0.18
+          if gh release view v1.0.18 >/dev/null 2>&1; then
+            gh release upload v1.0.18 Fenasal.apk --clobber
+          else
+            gh release create v1.0.18 Fenasal.apk \
+              --title "Fenasal v1.0.18" \
+              --notes "Baz sürüm: v1.0.18. Yalnızca overlay sürekli görünür olacak şekilde korunmuştur."
+          fi
