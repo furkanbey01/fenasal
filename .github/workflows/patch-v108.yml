@@ -19,61 +19,56 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
-
           p = Path('app/src/main/java/com/fenasal/app/ProjectionService.java')
           s = p.read_text(encoding='utf-8')
-
           constant_anchor = '    private static final float EMPTY_INK_MAX = 0.0065f;\n'
           constant = '    private static final double MIN_BET_SPREAD_RATIO = 0.35d;\n'
           if 'MIN_BET_SPREAD_RATIO' not in s:
               if constant_anchor not in s:
                   raise SystemExit('constant anchor not found')
               s = s.replace(constant_anchor, constant_anchor + constant, 1)
-
-          old = '''        boolean accessibility = TapAccessibilityService.isReady();
-        if (!betPlaced
-                && lastFive
-                && oneSecondConfirmed
-                && freshCount == 3
-                && max >= 0
-                && min >= 0
-                && max != min) {
-'''
-
-          new = '''        boolean accessibility = TapAccessibilityService.isReady();
-        double spreadRatio = (max >= 0 && min >= 0 && lastValues[max] > 0d)
-                ? (lastValues[max] - lastValues[min]) / lastValues[max]
-                : -1d;
-        boolean spreadEnough = spreadRatio >= MIN_BET_SPREAD_RATIO;
-
-        if (!betPlaced
-                && lastFive
-                && oneSecondConfirmed
-                && freshCount == 3
-                && max >= 0
-                && min >= 0
-                && max != min
-                && !spreadEnough) {
-            EventLog.log(this, String.format(Locale.ROOT,
-                    "BET_SKIP_CLOSE | high=%s low=%s | fark=%.1f%% | min=%.0f%%",
-                    formatAmount(lastValues[max]),
-                    formatAmount(lastValues[min]),
-                    spreadRatio * 100d,
-                    MIN_BET_SPREAD_RATIO * 100d));
-            betPlaced = true;
-            oneSecondConfirmed = false;
-        }
-
-        if (!betPlaced
-                && lastFive
-                && oneSecondConfirmed
-                && freshCount == 3
-                && max >= 0
-                && min >= 0
-                && max != min
-                && spreadEnough) {
-'''
-
+          old = (
+              '        boolean accessibility = TapAccessibilityService.isReady();\n'
+              '        if (!betPlaced\n'
+              '                && lastFive\n'
+              '                && oneSecondConfirmed\n'
+              '                && freshCount == 3\n'
+              '                && max >= 0\n'
+              '                && min >= 0\n'
+              '                && max != min) {\n'
+          )
+          new = (
+              '        boolean accessibility = TapAccessibilityService.isReady();\n'
+              '        double spreadRatio = (max >= 0 && min >= 0 && lastValues[max] > 0d)\n'
+              '                ? (lastValues[max] - lastValues[min]) / lastValues[max]\n'
+              '                : -1d;\n'
+              '        boolean spreadEnough = spreadRatio >= MIN_BET_SPREAD_RATIO;\n\n'
+              '        if (!betPlaced\n'
+              '                && lastFive\n'
+              '                && oneSecondConfirmed\n'
+              '                && freshCount == 3\n'
+              '                && max >= 0\n'
+              '                && min >= 0\n'
+              '                && max != min\n'
+              '                && !spreadEnough) {\n'
+              '            EventLog.log(this, String.format(Locale.ROOT,\n'
+              '                    "BET_SKIP_CLOSE | high=%s low=%s | fark=%.1f%% | min=%.0f%%",\n'
+              '                    formatAmount(lastValues[max]),\n'
+              '                    formatAmount(lastValues[min]),\n'
+              '                    spreadRatio * 100d,\n'
+              '                    MIN_BET_SPREAD_RATIO * 100d));\n'
+              '            betPlaced = true;\n'
+              '            oneSecondConfirmed = false;\n'
+              '        }\n\n'
+              '        if (!betPlaced\n'
+              '                && lastFive\n'
+              '                && oneSecondConfirmed\n'
+              '                && freshCount == 3\n'
+              '                && max >= 0\n'
+              '                && min >= 0\n'
+              '                && max != min\n'
+              '                && spreadEnough) {\n'
+          )
           if old not in s:
               raise SystemExit('tap condition anchor not found')
           s = s.replace(old, new, 1)
