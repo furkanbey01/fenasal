@@ -56,6 +56,7 @@ public class ProjectionService extends Service {
     private static final long VALUE_FRESH_MS = 1200L;
     private static final long COUNTDOWN_MAX_AGE_MS = 6500L;
     private static final float EMPTY_INK_MAX = 0.0065f;
+    private static final double MIN_BET_SPREAD_RATIO = 0.35d;
 
     private MediaProjection projection;
     private VirtualDisplay virtualDisplay;
@@ -414,13 +415,37 @@ public class ProjectionService extends Service {
                 false);
 
         boolean accessibility = TapAccessibilityService.isReady();
+        double spreadRatio = (max >= 0 && min >= 0 && lastValues[max] > 0d)
+                ? (lastValues[max] - lastValues[min]) / lastValues[max]
+                : -1d;
+        boolean spreadEnough = spreadRatio >= MIN_BET_SPREAD_RATIO;
+
         if (!betPlaced
                 && lastFive
                 && oneSecondConfirmed
                 && freshCount == 3
                 && max >= 0
                 && min >= 0
-                && max != min) {
+                && max != min
+                && !spreadEnough) {
+            EventLog.log(this, String.format(Locale.ROOT,
+                    "BET_SKIP_CLOSE | high=%s low=%s | fark=%.1f%% | min=%.0f%%",
+                    formatAmount(lastValues[max]),
+                    formatAmount(lastValues[min]),
+                    spreadRatio * 100d,
+                    MIN_BET_SPREAD_RATIO * 100d));
+            betPlaced = true;
+            oneSecondConfirmed = false;
+        }
+
+        if (!betPlaced
+                && lastFive
+                && oneSecondConfirmed
+                && freshCount == 3
+                && max >= 0
+                && min >= 0
+                && max != min
+                && spreadEnough) {
 
             if (!accessibility) {
                 EventLog.log(this, "TAP_BLOCKED | Erişilebilirlik servisi kapalı | plan=" + plan);
