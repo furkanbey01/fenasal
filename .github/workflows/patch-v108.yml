@@ -1,4 +1,4 @@
-name: Apply countdown fixes
+name: Keep overlay always visible
 
 on:
   push:
@@ -15,19 +15,35 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Apply source fixes
+      - name: Make only the marker overlay always visible
         run: |
-          python tools/patch_last_second.py
+          python - <<'PY'
+          from pathlib import Path
 
-      - name: Commit source fixes
+          path = Path('app/src/main/java/com/fenasal/app/ProjectionService.java')
+          text = path.read_text(encoding='utf-8')
+
+          old = '''                displayValues,
+                remaining,
+                lastFive,
+                false);'''
+          new = '''                displayValues,
+                remaining,
+                true,
+                false);'''
+
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f'Expected exactly one overlay marker call, found {count}')
+
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+
+      - name: Commit the one-line behavior change
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add app/src/main/java/com/fenasal/app/ProjectionService.java
-          if git diff --cached --quiet; then
-            echo "No source changes needed"
-            exit 0
-          fi
           git diff --cached --check
-          git commit -m "Tap only on confirmed one-second countdown"
+          git commit -m "Show high and low markers continuously"
           git push
