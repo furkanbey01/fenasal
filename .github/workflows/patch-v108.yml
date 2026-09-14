@@ -1,4 +1,4 @@
-name: Keep overlay always visible
+name: Add close-values bet guard
 
 on:
   push:
@@ -15,15 +15,76 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Make only the marker overlay always visible
+      - name: Add minimum spread guard
         run: |
-          python -c "from pathlib import Path; p=Path('app/src/main/java/com/fenasal/app/ProjectionService.java'); s=p.read_text(encoding='utf-8'); old='                lastFive,\\n                false);'; new='                true,\\n                false);'; assert s.count(old)==1, s.count(old); p.write_text(s.replace(old,new,1), encoding='utf-8')"
+          python - <<'PY'
+          from pathlib import Path
 
-      - name: Commit the one-line behavior change
+          p = Path('app/src/main/java/com/fenasal/app/ProjectionService.java')
+          s = p.read_text(encoding='utf-8')
+
+          constant_anchor = '    private static final float EMPTY_INK_MAX = 0.0065f;\n'
+          constant = '    private static final double MIN_BET_SPREAD_RATIO = 0.35d;\n'
+          if 'MIN_BET_SPREAD_RATIO' not in s:
+              if constant_anchor not in s:
+                  raise SystemExit('constant anchor not found')
+              s = s.replace(constant_anchor, constant_anchor + constant, 1)
+
+          old = '''        boolean accessibility = TapAccessibilityService.isReady();
+        if (!betPlaced
+                && lastFive
+                && oneSecondConfirmed
+                && freshCount == 3
+                && max >= 0
+                && min >= 0
+                && max != min) {
+'''
+
+          new = '''        boolean accessibility = TapAccessibilityService.isReady();
+        double spreadRatio = (max >= 0 && min >= 0 && lastValues[max] > 0d)
+                ? (lastValues[max] - lastValues[min]) / lastValues[max]
+                : -1d;
+        boolean spreadEnough = spreadRatio >= MIN_BET_SPREAD_RATIO;
+
+        if (!betPlaced
+                && lastFive
+                && oneSecondConfirmed
+                && freshCount == 3
+                && max >= 0
+                && min >= 0
+                && max != min
+                && !spreadEnough) {
+            EventLog.log(this, String.format(Locale.ROOT,
+                    "BET_SKIP_CLOSE | high=%s low=%s | fark=%.1f%% | min=%.0f%%",
+                    formatAmount(lastValues[max]),
+                    formatAmount(lastValues[min]),
+                    spreadRatio * 100d,
+                    MIN_BET_SPREAD_RATIO * 100d));
+            betPlaced = true;
+            oneSecondConfirmed = false;
+        }
+
+        if (!betPlaced
+                && lastFive
+                && oneSecondConfirmed
+                && freshCount == 3
+                && max >= 0
+                && min >= 0
+                && max != min
+                && spreadEnough) {
+'''
+
+          if old not in s:
+              raise SystemExit('tap condition anchor not found')
+          s = s.replace(old, new, 1)
+          p.write_text(s, encoding='utf-8')
+          PY
+
+      - name: Commit source guard
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add app/src/main/java/com/fenasal/app/ProjectionService.java
           git diff --cached --check
-          git commit -m "Show high and low markers continuously"
+          git commit -m "Skip bet when high and low are too close"
           git push
