@@ -15,149 +15,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Patch countdown and marker transparency
-        shell: bash
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          import re
+      - name: Apply source fixes
+        run: python tools/patch_v108.py
 
-          projection = Path('app/src/main/java/com/fenasal/app/ProjectionService.java')
-          s = projection.read_text(encoding='utf-8')
-
-          # Track the last accepted whole countdown value so 12 can never be mistaken for 2.
-          needle = '    private boolean betPlaced;\n    private long lastTapTime;\n'
-          replacement = ('    private boolean betPlaced;\n'
-                         '    private long lastTapTime;\n'
-                         '    private Integer lastCountdownObserved;\n'
-                         '    private long lastCountdownObservedAt;\n')
-          if 'private Integer lastCountdownObserved;' not in s:
-              if needle not in s:
-                  raise SystemExit('field insertion point not found')
-              s = s.replace(needle, replacement, 1)
-
-          # IMPORTANT: countdown is read only from the WHOLE OCR line. ML Kit may split "12"
-          # into elements "1" and "2"; reading elements caused the old early bet at 12 seconds.
-          s = s.replace('                    frameCountdown = chooseCountdown(frameCountdown, eraw, ex, ey);\n\n', '', 1)
-
-          new_update = r'''    private void updateCountdown(int value, long now) {
-        double before = estimatedRemaining(now);
-        boolean firstReading = countdownBase == null;
-        long gap = lastCountdownObservedAt == 0L
-                ? Long.MAX_VALUE
-                : now - lastCountdownObservedAt;
-
-        // A new round is credible only when the timer jumps back to 10..15 after the
-        // previous round ended / a real gap occurred. 4 or 5 must NEVER reset betPlaced.
-        boolean newRound = !firstReading
-                && value >= 10
-                && (gap > 3000L
-                    || (lastCountdownObserved != null && lastCountdownObserved <= 3))
-                && (lastTapTime == 0L || now - lastTapTime > 2500L);
-
-        if (!firstReading && !newRound && lastCountdownObserved != null) {
-            // Countdown is monotonic. Reject impossible upward jumps inside one round.
-            // This also blocks a stray OCR "12" after we have already reached 2.
-            if (value > lastCountdownObserved + 1) {
-                EventLog.log(this, "COUNTDOWN_REJECT_UP | OCR=" + value
-                        + " previous=" + lastCountdownObserved);
-                return;
-            }
-
-            // During the final seconds be stricter: a bad OCR sample must not move the
-            // internal clock enough to create an early or duplicate tap.
-            if (before >= 0d && before <= 5.5d && Math.abs(value - before) > 1.8d) {
-                EventLog.log(this, String.format(Locale.ROOT,
-                        "COUNTDOWN_REJECT | OCR=%d tahmin=%.2f", value, before));
-                return;
-            }
-        }
-
-        if (firstReading) {
-            betPlaced = false;
-            EventLog.log(this, "ROUND_SYNC | geri sayım=" + value);
-        } else if (newRound) {
-            betPlaced = false;
-            lastTapTime = 0L;
-            EventLog.log(this, "ROUND_START | geri sayım=" + value);
-        }
-
-        countdownBase = value;
-        countdownBaseTime = now;
-        lastCountdownObserved = value;
-        lastCountdownObservedAt = now;
-
-        if (value != lastLoggedSecond) {
-            lastLoggedSecond = value;
-            EventLog.log(this, "COUNTDOWN | " + value);
-        }
-    }
-'''
-          s, n = re.subn(
-              r'    private void updateCountdown\(int value, long now\) \{.*?\n    \}\n\n    private double estimatedRemaining',
-              new_update + '\n    private double estimatedRemaining',
-              s,
-              count=1,
-              flags=re.S)
-          if n != 1:
-              raise SystemExit('updateCountdown replacement failed')
-
-          new_choose = r'''    private Integer chooseCountdown(Integer current, String raw, float cx, float cy) {
-        if (cx < 0.535f || cx > 0.650f || cy < 0.525f || cy > 0.575f) {
-            return current;
-        }
-
-        // The game counts 15 -> 0. Parse the complete line only; never individual OCR
-        // elements, because "12" is often split by ML Kit into "1" and "2".
-        String s = raw == null ? "" : raw.trim().replaceAll("\\s+", "");
-        if (!s.matches("^(?:1[0-5]|[0-9])$")) return current;
-
-        try {
-            int v = Integer.parseInt(s);
-            return (v >= 0 && v <= 15) ? v : current;
-        } catch (NumberFormatException ignored) {
-            return current;
-        }
-    }
-'''
-          s, n = re.subn(
-              r'    private Integer chooseCountdown\(Integer current, String raw, float cx, float cy\) \{.*?\n    \}\n\n    private int anchorIndex',
-              new_choose + '\n    private int anchorIndex',
-              s,
-              count=1,
-              flags=re.S)
-          if n != 1:
-              raise SystemExit('chooseCountdown replacement failed')
-
-          # Fire around the start of the 2-second window, not near zero.
-          s = s.replace('                && remaining <= 2.00d\n                && remaining >= 0.45d',
-                        '                && remaining <= 2.15d\n                && remaining >= 1.10d', 1)
-
-          projection.write_text(s, encoding='utf-8')
-
-          overlay = Path('app/src/main/java/com/fenasal/app/TargetOverlayView.java')
-          t = overlay.read_text(encoding='utf-8')
-
-          # Keep the final-five-second markings visible but less intrusive.
-          t = t.replace('int highColor = tapping ? 0xFFFFD54F : 0xFF33D17A;',
-                        'int highColor = tapping ? 0xD9FFD54F : 0xB833D17A;', 1)
-          t = t.replace('int lowColor = tapping ? 0xFFFFD54F : 0xFF40C4FF;',
-                        'int lowColor = tapping ? 0xD9FFD54F : 0xB840C4FF;', 1)
-          t = t.replace('strokePaint.setStrokeWidth(dp(tapping ? 6 : 4));',
-                        'strokePaint.setStrokeWidth(dp(tapping ? 5 : 3));', 1)
-          t = t.replace('badgePaint.setColor(0xD9000000);',
-                        'badgePaint.setColor(0x99000000);')
-
-          overlay.write_text(t, encoding='utf-8')
-          PY
-
-      - name: Commit fixes
-        shell: bash
+      - name: Commit source fixes
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add app/src/main/java/com/fenasal/app/ProjectionService.java \
-                  app/src/main/java/com/fenasal/app/TargetOverlayView.java
+          git add app/src/main/java/com/fenasal/app/ProjectionService.java app/src/main/java/com/fenasal/app/TargetOverlayView.java
+          if git diff --cached --quiet; then
+            echo "No source changes needed"
+            exit 0
+          fi
           git diff --cached --check
           git commit -m "Fix 15-second countdown and soften target markers"
           git push
