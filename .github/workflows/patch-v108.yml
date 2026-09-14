@@ -17,27 +17,7 @@ jobs:
 
       - name: Make only the marker overlay always visible
         run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          path = Path('app/src/main/java/com/fenasal/app/ProjectionService.java')
-          text = path.read_text(encoding='utf-8')
-
-          old = '''                displayValues,
-                remaining,
-                lastFive,
-                false);'''
-          new = '''                displayValues,
-                remaining,
-                true,
-                false);'''
-
-          count = text.count(old)
-          if count != 1:
-              raise SystemExit(f'Expected exactly one overlay marker call, found {count}')
-
-          path.write_text(text.replace(old, new, 1), encoding='utf-8')
-          PY
+          python -c "from pathlib import Path; p=Path('app/src/main/java/com/fenasal/app/ProjectionService.java'); s=p.read_text(encoding='utf-8'); old='                lastFive,\\n                false);'; new='                true,\\n                false);'; assert s.count(old)==1, s.count(old); p.write_text(s.replace(old,new,1), encoding='utf-8')"
 
       - name: Commit the one-line behavior change
         run: |
