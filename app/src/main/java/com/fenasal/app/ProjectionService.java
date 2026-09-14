@@ -83,6 +83,7 @@ public class ProjectionService extends Service {
     private long lastTapTime;
     private Integer lastCountdownObserved;
     private long lastCountdownObservedAt;
+    private boolean oneSecondConfirmed;
 
     private int lastLoggedSecond = -99;
     private String lastPlan = "";
@@ -415,8 +416,7 @@ public class ProjectionService extends Service {
         boolean accessibility = TapAccessibilityService.isReady();
         if (!betPlaced
                 && lastFive
-                && remaining <= 2.15d
-                && remaining >= 1.10d
+                && oneSecondConfirmed
                 && freshCount == 3
                 && max >= 0
                 && min >= 0
@@ -448,6 +448,7 @@ public class ProjectionService extends Service {
                         TARGET_NAMES[max], TARGET_NAMES[min]);
 
                 betPlaced = true;
+                oneSecondConfirmed = false;
                 lastTapTime = now;
             }
         }
@@ -456,28 +457,25 @@ public class ProjectionService extends Service {
     private void updateCountdown(int value, long now) {
         double before = estimatedRemaining(now);
         boolean firstReading = countdownBase == null;
-        long gap = lastCountdownObservedAt == 0L
+        Integer previousObserved = lastCountdownObserved;
+        long previousObservedAt = lastCountdownObservedAt;
+        long gap = previousObservedAt == 0L
                 ? Long.MAX_VALUE
-                : now - lastCountdownObservedAt;
+                : now - previousObservedAt;
 
-        // New round is credible only when the timer jumps back to 10..15 after
-        // the previous round ended or there was a real gap. 4/5 never reset a bet.
         boolean newRound = !firstReading
                 && value >= 10
                 && (gap > 3000L
-                    || (lastCountdownObserved != null && lastCountdownObserved <= 3))
+                    || (previousObserved != null && previousObserved <= 3))
                 && (lastTapTime == 0L || now - lastTapTime > 2500L);
 
-        if (!firstReading && !newRound && lastCountdownObserved != null) {
-            // Timer must count downward inside one round. Reject impossible jumps.
-            if (value > lastCountdownObserved + 1) {
+        if (!firstReading && !newRound && previousObserved != null) {
+            if (value > previousObserved + 1) {
                 EventLog.log(this, "COUNTDOWN_REJECT_UP | OCR=" + value
-                        + " previous=" + lastCountdownObserved);
+                        + " previous=" + previousObserved);
                 return;
             }
 
-            // Be stricter in the final seconds so a bad OCR sample cannot cause
-            // an early or duplicate tap.
             if (before >= 0d && before <= 5.5d && Math.abs(value - before) > 1.8d) {
                 EventLog.log(this, String.format(Locale.ROOT,
                         "COUNTDOWN_REJECT | OCR=%d tahmin=%.2f", value, before));
@@ -487,11 +485,29 @@ public class ProjectionService extends Service {
 
         if (firstReading) {
             betPlaced = false;
+            oneSecondConfirmed = false;
             EventLog.log(this, "ROUND_SYNC | geri sayım=" + value);
         } else if (newRound) {
             betPlaced = false;
+            oneSecondConfirmed = false;
             lastTapTime = 0L;
             EventLog.log(this, "ROUND_START | geri sayım=" + value);
+        }
+
+        // NEVER tap just because OCR says "1". It must follow a recent genuine 2 or 3.
+        // This blocks the recurring bug where the on-screen "12" is misread as "1".
+        boolean credibleOne = value == 1
+                && previousObserved != null
+                && previousObserved >= 2
+                && previousObserved <= 3
+                && previousObservedAt > 0L
+                && now - previousObservedAt <= 2200L;
+
+        if (credibleOne && !betPlaced) {
+            oneSecondConfirmed = true;
+            EventLog.log(this, "ONE_SECOND_CONFIRMED | previous=" + previousObserved + " -> 1");
+        } else if (value > 1) {
+            oneSecondConfirmed = false;
         }
 
         countdownBase = value;
