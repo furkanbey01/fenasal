@@ -354,7 +354,7 @@ public class ProjectionService extends Service {
         }
 
         if (frameCountdown != null) {
-            updateCountdown(frameCountdown, now);
+            updateCountdown(frameCountdown, now, text.getText());
         }
 
         for (int i = 0; i < 3; i++) {
@@ -455,7 +455,13 @@ public class ProjectionService extends Service {
                 && midLowGapRatio >= MIN_ADJACENT_GAP_RATIO;
 
         String previousLatePlan = !latePlanC2.isEmpty() ? latePlanC2 : latePlanC3;
-        boolean latePlanStable = !previousLatePlan.isEmpty() && plan.equals(previousLatePlan);
+        boolean latePlanStable;
+        if (!latePlanC2.isEmpty()) {
+            latePlanStable = plan.equals(latePlanC2)
+                    && (latePlanC3.isEmpty() || plan.equals(latePlanC3));
+        } else {
+            latePlanStable = !latePlanC3.isEmpty() && plan.equals(latePlanC3);
+        }
         boolean strategyPass = spreadEnough && adjacentGapsEnough && latePlanStable;
 
         if (!betPlaced
@@ -466,11 +472,12 @@ public class ProjectionService extends Service {
                 && min >= 0
                 && max != min) {
             EventLog.log(this, String.format(Locale.ROOT,
-                    "STRATEGY_CHECK | hand=%d | plan=%s | prev=%s | spread=%.1f%%"
+                    "STRATEGY_CHECK | hand=%d | plan=%s | c3=%s | c2=%s | spread=%.1f%%"
                             + " | highMid=%.1f%% | midLow=%.1f%% | stable=%s | pass=%s",
                     roundNumber,
                     plan,
-                    previousLatePlan.isEmpty() ? "YOK" : previousLatePlan,
+                    latePlanC3.isEmpty() ? "YOK" : latePlanC3,
+                    latePlanC2.isEmpty() ? "YOK" : latePlanC2,
                     spreadRatio * 100d,
                     highMidGapRatio * 100d,
                     midLowGapRatio * 100d,
@@ -510,12 +517,13 @@ public class ProjectionService extends Service {
                     + (!latePlanStable && !adjacentGapsEnough ? "+" : "")
                     + (!adjacentGapsEnough ? "AMBIGUOUS_RANKING" : "");
             EventLog.log(this, String.format(Locale.ROOT,
-                    "STRATEGY_SKIP | hand=%d | reason=%s | plan=%s | prev=%s"
+                    "STRATEGY_SKIP | hand=%d | reason=%s | plan=%s | c3=%s | c2=%s"
                             + " | spread=%.1f%% | highMid=%.1f%% | midLow=%.1f%%",
                     roundNumber,
                     reason,
                     plan,
-                    previousLatePlan.isEmpty() ? "YOK" : previousLatePlan,
+                    latePlanC3.isEmpty() ? "YOK" : latePlanC3,
+                    latePlanC2.isEmpty() ? "YOK" : latePlanC2,
                     spreadRatio * 100d,
                     highMidGapRatio * 100d,
                     midLowGapRatio * 100d));
@@ -567,7 +575,13 @@ public class ProjectionService extends Service {
         }
     }
 
-    private void updateCountdown(int value, long now) {
+    private boolean containsStartCue(String rawOcr) {
+        if (rawOcr == null) return false;
+        String lower = rawOcr.toLowerCase(Locale.ROOT);
+        return lower.contains("başla") || lower.contains("basla");
+    }
+
+    private void updateCountdown(int value, long now, String rawOcr) {
         double before = estimatedRemaining(now);
         boolean firstReading = countdownBase == null;
         Integer previousObserved = lastCountdownObserved;
@@ -575,11 +589,11 @@ public class ProjectionService extends Service {
         long gap = previousObservedAt == 0L
                 ? Long.MAX_VALUE
                 : now - previousObservedAt;
+        boolean startCue = containsStartCue(rawOcr);
 
         boolean newRound = !firstReading
-                && value >= 10
-                && (gap > 3000L
-                    || (previousObserved != null && previousObserved <= 3))
+                && gap > 3000L
+                && (value >= 10 || (value >= 5 && startCue))
                 && (lastTapTime == 0L || now - lastTapTime > 2500L);
 
         if (!firstReading && !newRound && previousObserved != null) {
@@ -607,6 +621,10 @@ public class ProjectionService extends Service {
             oneSecondConfirmed = false;
             lastTapTime = 0L;
             startRound(now, value, "START");
+            if (value < 10) {
+                EventLog.log(this, "ROUND_RECOVERED | geri sayım=" + value
+                        + " | cue=" + (startCue ? "BASLA" : "FALLBACK"));
+            }
             EventLog.log(this, "ROUND_START | geri sayım=" + value);
         }
 
