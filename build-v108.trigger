@@ -6,3 +6,4 @@ Rebuild v1.0.18 with close-values bet guard.
 Rebuild v1.0.18 with full per-hand logging.
 Rebuild v1.0.18 with strategy v2 quality gate.
 Rebuild v1.0.18 with strategy v3 round recovery and 3-2-1 stability.
+Rebuild v1.0.18 with strategy v3.1 countdown hardening.
