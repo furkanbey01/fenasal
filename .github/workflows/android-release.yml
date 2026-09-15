@@ -39,8 +39,8 @@ jobs:
 
       - name: Verify version metadata
         run: |
-          grep -q "versionCode 19" app/build.gradle
-          grep -q "versionName '1.0.19'" app/build.gradle
+          grep -q "versionCode 20" app/build.gradle
+          grep -q "versionName '1.0.20'" app/build.gradle
           grep -q '<string name="app_name">Fena</string>' app/src/main/res/values/strings.xml
 
       - name: Build signed release APK
@@ -58,7 +58,7 @@ jobs:
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Fena-v1.0.19
+          name: Fena-v1.0.20
           path: Fena.apk
           if-no-files-found: error
 
@@ -79,4 +79,4 @@ jobs:
           gh release create "$TAG" Fena.apk \
             --target "$GITHUB_SHA" \
             --title "Fena $TAG" \
-            --notes "Fena $TAG: dinamik ekran konumu takibi, güvenli BOŞ doğrulaması, OCR tur geçişi kurtarma, hızlı ve doğrulanmış çift dokunma, asenkron log yazımı, sürüm düzeni ve yıldırım logosu."
+            --notes "Fena $TAG: v1.0.19 bahis tetikleme regresyonu düzeltildi. Hızlı OCR alanı, final saniye zaman tahmini, daha dayanıklı değer tazeliği ve BET_GATE tanısı eklendi. Strateji eşikleri değiştirilmedi."
