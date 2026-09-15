@@ -51,18 +51,18 @@ public class ProjectionService extends Service {
     private static final float DISCOVERY_X1 = 0.98f;
     private static final float DISCOVERY_Y0 = 0.30f;
     private static final float DISCOVERY_Y1 = 0.82f;
-    private static final float LOCKED_X_MARGIN = 0.15f;
-    private static final float LOCKED_Y_TOP = 0.16f;
-    private static final float LOCKED_Y_BOTTOM = 0.09f;
+    private static final float LOCKED_X_MARGIN = 0.12f;
+    private static final float LOCKED_Y_TOP = 0.125f;
+    private static final float LOCKED_Y_BOTTOM = 0.065f;
     private static final float OCR_SCALE = 2.6f;
 
-    private static final long VALUE_FRESH_MS = 1200L;
+    private static final long VALUE_FRESH_MS = 1800L;
     private static final long COUNTDOWN_MAX_AGE_MS = 6500L;
-    private static final long ANCHOR_REDISCOVERY_MS = 1800L;
-    private static final long ANCHOR_FRESH_FOR_EMPTY_MS = 1200L;
+    private static final long ANCHOR_REDISCOVERY_MS = 8000L;
+    private static final long ANCHOR_FRESH_FOR_EMPTY_MS = 5000L;
     private static final float EMPTY_INK_MAX = 0.0065f;
-    private static final int EMPTY_CONFIRM_FRAMES = 3;
-    private static final long EMPTY_CONFIRM_WINDOW_MS = 900L;
+    private static final int EMPTY_CONFIRM_FRAMES = 2;
+    private static final long EMPTY_CONFIRM_WINDOW_MS = 1400L;
     private static final long ROUND_RESET_CONFIRM_MS = 1500L;
     private static final double MIN_BET_SPREAD_RATIO = 0.60d;
     private static final double MIN_ADJACENT_GAP_RATIO = 0.10d;
@@ -106,6 +106,7 @@ public class ProjectionService extends Service {
     private String lastPlan = "";
     private final double[] lastLoggedValues = {-999d, -999d, -999d};
     private long lastMissLogAt;
+    private long lastGateLogAt;
 
     private int roundNumber;
     private long roundStartedAt;
@@ -428,6 +429,27 @@ public class ProjectionService extends Service {
         }
 
         double remaining = estimatedRemaining(now);
+
+        // v1.0.20: keep the original 1-second trigger semantics, but do not
+        // require ML Kit to physically catch the single frame that contains "1".
+        // A recent genuine 2/3 plus the monotonic countdown estimate can confirm
+        // the same final-second window when OCR is a little late.
+        if (!betPlaced
+                && !oneSecondConfirmed
+                && lastCountdownObserved != null
+                && lastCountdownObserved >= 2
+                && lastCountdownObserved <= 3
+                && lastCountdownObservedAt > 0L
+                && now - lastCountdownObservedAt >= 650L
+                && now - lastCountdownObservedAt <= 2600L
+                && remaining >= 0d
+                && remaining <= 1.08d) {
+            oneSecondConfirmed = true;
+            EventLog.log(this, String.format(Locale.ROOT,
+                    "ONE_SECOND_ESTIMATED | previous=%d | remaining=%.2f",
+                    lastCountdownObserved, remaining));
+        }
+
         int freshCount = 0;
         boolean[] fresh = new boolean[3];
         for (int i = 0; i < 3; i++) {
@@ -515,6 +537,23 @@ public class ProjectionService extends Service {
             latePlanStable = !latePlanC3.isEmpty() && plan.equals(latePlanC3);
         }
         boolean strategyPass = spreadEnough && adjacentGapsEnough && latePlanStable;
+
+        if (!betPlaced
+                && remaining >= 0d
+                && remaining <= 1.35d
+                && now - lastGateLogAt > 450L) {
+            lastGateLogAt = now;
+            EventLog.log(this, String.format(Locale.ROOT,
+                    "BET_GATE | T=%.2f | one=%s | fresh=%d/3 | plan=%s | spread=%s | gaps=%s | stable=%s | a11y=%s",
+                    remaining,
+                    oneSecondConfirmed ? "YES" : "NO",
+                    freshCount,
+                    plan,
+                    spreadEnough ? "YES" : "NO",
+                    adjacentGapsEnough ? "YES" : "NO",
+                    latePlanStable ? "YES" : "NO",
+                    accessibility ? "YES" : "NO"));
+        }
 
         if (!betPlaced
                 && lastFive
@@ -1053,10 +1092,13 @@ public class ProjectionService extends Service {
     private Integer chooseCountdown(Integer current, String raw, float cx, float cy) {
         float expectedX = anchorsLocked ? targetX[1] : DEFAULT_X[1];
         float expectedLabelY = anchorsLocked ? labelY : DEFAULT_LABEL_Y;
-        float minY = expectedLabelY - 0.145f;
-        float maxY = expectedLabelY - 0.048f;
+        // Keep countdown parsing near the original proven timer band.
+        // Dynamic anchors move the band with the game, while the tighter window
+        // avoids mistaking central bet amounts for the 15..0 timer.
+        float minY = expectedLabelY - 0.112f;
+        float maxY = expectedLabelY - 0.043f;
 
-        if (Math.abs(cx - expectedX) > 0.13f || cy < minY || cy > maxY) {
+        if (Math.abs(cx - expectedX) > 0.105f || cy < minY || cy > maxY) {
             return current;
         }
 
