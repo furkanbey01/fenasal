@@ -33,7 +33,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add app/src/main/java/com/fenasal/app/ProjectionService.java app/build.gradle .github/workflows/android-release.yml
+          git add app/src/main/java/com/fenasal/app/ProjectionService.java app/build.gradle
           git diff --cached --check
           git commit -m "Fix v1.0.19 bet trigger regression"
           git push origin HEAD:fena-v1.0.20-bet-trigger-fix
