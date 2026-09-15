@@ -5,7 +5,9 @@
 
     <application
         android:allowBackup="true"
-        android:label="Fenasal"
+        android:icon="@drawable/ic_launcher"
+        android:roundIcon="@drawable/ic_launcher"
+        android:label="@string/app_name"
         android:theme="@style/Theme.Fenasal">
 
         <activity

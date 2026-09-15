@@ -47,15 +47,23 @@ public class ProjectionService extends Service {
     private static final float BOX_TOP_ABOVE_LABEL = 0.046f;
     private static final float BOX_BOTTOM_BELOW_LABEL = 0.100f;
 
-    private static final float SEARCH_X0 = 0.20f;
-    private static final float SEARCH_X1 = 0.97f;
-    private static final float SEARCH_Y0 = 0.515f;
-    private static final float SEARCH_Y1 = 0.665f;
+    private static final float DISCOVERY_X0 = 0.04f;
+    private static final float DISCOVERY_X1 = 0.98f;
+    private static final float DISCOVERY_Y0 = 0.30f;
+    private static final float DISCOVERY_Y1 = 0.82f;
+    private static final float LOCKED_X_MARGIN = 0.15f;
+    private static final float LOCKED_Y_TOP = 0.16f;
+    private static final float LOCKED_Y_BOTTOM = 0.09f;
     private static final float OCR_SCALE = 2.6f;
 
     private static final long VALUE_FRESH_MS = 1200L;
     private static final long COUNTDOWN_MAX_AGE_MS = 6500L;
+    private static final long ANCHOR_REDISCOVERY_MS = 1800L;
+    private static final long ANCHOR_FRESH_FOR_EMPTY_MS = 1200L;
     private static final float EMPTY_INK_MAX = 0.0065f;
+    private static final int EMPTY_CONFIRM_FRAMES = 3;
+    private static final long EMPTY_CONFIRM_WINDOW_MS = 900L;
+    private static final long ROUND_RESET_CONFIRM_MS = 1500L;
     private static final double MIN_BET_SPREAD_RATIO = 0.60d;
     private static final double MIN_ADJACENT_GAP_RATIO = 0.10d;
 
@@ -74,10 +82,13 @@ public class ProjectionService extends Service {
     private float labelY = DEFAULT_LABEL_Y;
     private boolean anchorsLocked;
     private boolean fallbackLogged;
+    private long lastAnchorSeenAt;
 
     private final double[] lastValues = {-1d, -1d, -1d};
     private final boolean[] lastEmpty = {false, false, false};
     private final long[] valueTimes = {0L, 0L, 0L};
+    private final int[] emptyEvidence = {0, 0, 0};
+    private final long[] emptyEvidenceTimes = {0L, 0L, 0L};
 
     private Integer countdownBase;
     private long countdownBaseTime;
@@ -87,13 +98,15 @@ public class ProjectionService extends Service {
     private long lastCountdownObservedAt;
     private boolean oneSecondConfirmed;
 
+    private Integer roundResetCandidate;
+    private long roundResetCandidateAt;
+    private int roundResetCandidateHits;
+
     private int lastLoggedSecond = -99;
     private String lastPlan = "";
     private final double[] lastLoggedValues = {-999d, -999d, -999d};
     private long lastMissLogAt;
 
-    // Full per-hand logging. These fields are observational only; they do not
-    // participate in target selection or tap timing.
     private int roundNumber;
     private long roundStartedAt;
     private String roundOutcome = "NONE";
@@ -110,15 +123,15 @@ public class ProjectionService extends Service {
         serviceStartedAt = System.currentTimeMillis();
         createNotificationChannel();
         Notification notification = new NotificationCompat.Builder(this, CHANNEL)
-                .setContentTitle("Fenasal çalışıyor")
+                .setContentTitle("Fena çalışıyor")
                 .setContentText("Ekran okunuyor, plan ve kayıtlar tutuluyor")
-                .setSmallIcon(android.R.drawable.ic_menu_view)
+                .setSmallIcon(R.drawable.ic_launcher)
                 .setOngoing(true)
                 .build();
         startForeground(7, notification);
         recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS);
         EventLog.log(this, "SERVICE_START | ProjectionService başladı");
-        TapAccessibilityService.updateOverlay("FENASAL • BAŞLIYOR\nEkran yakalama hazırlanıyor...");
+        TapAccessibilityService.updateOverlay("FENA • BAŞLIYOR\nEkran yakalama hazırlanıyor...");
     }
 
     @Override
@@ -149,7 +162,7 @@ public class ProjectionService extends Service {
 
         EventLog.log(this, "SCREEN | " + width + "x" + height + " density=" + density);
 
-        captureThread = new HandlerThread("FenasalCapture");
+        captureThread = new HandlerThread("FenaCapture");
         captureThread.start();
         captureHandler = new Handler(captureThread.getLooper());
 
@@ -157,7 +170,7 @@ public class ProjectionService extends Service {
             @Override
             public void onStop() {
                 EventLog.log(ProjectionService.this, "PROJECTION_STOP | Android ekran yakalamayı kapattı");
-                TapAccessibilityService.updateOverlay("FENASAL • DURDU\nAndroid ekran yakalamayı kapattı.");
+                TapAccessibilityService.updateOverlay("FENA • DURDU\nAndroid ekran yakalamayı kapattı.");
                 stopSelf();
             }
         }, captureHandler);
@@ -165,7 +178,7 @@ public class ProjectionService extends Service {
         try {
             imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2);
             virtualDisplay = projection.createVirtualDisplay(
-                    "FenasalDisplay", width, height, density,
+                    "FenaDisplay", width, height, density,
                     DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                     imageReader.getSurface(), null, captureHandler);
         } catch (Exception e) {
@@ -175,7 +188,7 @@ public class ProjectionService extends Service {
         }
 
         TapAccessibilityService.updateOverlay(
-                "FENASAL • EKRAN OKUNUYOR\n" + width + "x" + height + " • hedefler aranıyor");
+                "FENA • EKRAN OKUNUYOR\n" + width + "x" + height + " • hedefler aranıyor");
 
         imageReader.setOnImageAvailableListener(reader -> {
             long now = System.currentTimeMillis();
@@ -229,6 +242,7 @@ public class ProjectionService extends Service {
         processing = true;
         final int fullWidth = full.getWidth();
         final int fullHeight = full.getHeight();
+        long now = System.currentTimeMillis();
 
         float amountY = labelY - AMOUNT_ABOVE_LABEL;
         final float[] inkRatios = new float[3];
@@ -236,10 +250,30 @@ public class ProjectionService extends Service {
             inkRatios[i] = whiteInkRatio(full, targetX[i], amountY);
         }
 
-        int left = clamp(Math.round(fullWidth * SEARCH_X0), 0, fullWidth - 2);
-        int top = clamp(Math.round(fullHeight * SEARCH_Y0), 0, fullHeight - 2);
-        int right = clamp(Math.round(fullWidth * SEARCH_X1), left + 1, fullWidth);
-        int bottom = clamp(Math.round(fullHeight * SEARCH_Y1), top + 1, fullHeight);
+        boolean discoveryScan = !anchorsLocked
+                || lastAnchorSeenAt == 0L
+                || now - lastAnchorSeenAt > ANCHOR_REDISCOVERY_MS;
+
+        float x0;
+        float x1;
+        float y0;
+        float y1;
+        if (discoveryScan) {
+            x0 = DISCOVERY_X0;
+            x1 = DISCOVERY_X1;
+            y0 = DISCOVERY_Y0;
+            y1 = DISCOVERY_Y1;
+        } else {
+            x0 = clamp01(targetX[0] - LOCKED_X_MARGIN);
+            x1 = clamp01(targetX[2] + LOCKED_X_MARGIN);
+            y0 = clamp01(labelY - LOCKED_Y_TOP);
+            y1 = clamp01(labelY + LOCKED_Y_BOTTOM);
+        }
+
+        int left = clamp(Math.round(fullWidth * x0), 0, fullWidth - 2);
+        int top = clamp(Math.round(fullHeight * y0), 0, fullHeight - 2);
+        int right = clamp(Math.round(fullWidth * x1), left + 1, fullWidth);
+        int bottom = clamp(Math.round(fullHeight * y1), top + 1, fullHeight);
 
         Bitmap crop;
         Bitmap scan;
@@ -292,7 +326,7 @@ public class ProjectionService extends Service {
                 String raw = line.getText().trim();
 
                 int anchor = anchorIndex(raw);
-                if (anchor >= 0 && cy > 0.585f && cy < 0.665f) {
+                if (anchor >= 0) {
                     foundX[anchor] = cx;
                     foundY[anchor] = cy;
                 }
@@ -300,7 +334,7 @@ public class ProjectionService extends Service {
                 frameCountdown = chooseCountdown(frameCountdown, raw, cx, cy);
 
                 float amountY = labelY - AMOUNT_ABOVE_LABEL;
-                if (Math.abs(cy - amountY) <= 0.020f) {
+                if (Math.abs(cy - amountY) <= 0.022f) {
                     int index = nearestTarget(cx);
                     double amount = parseAmount(raw);
                     if (index >= 0 && amount >= 0) frameValues[index] = amount;
@@ -313,13 +347,13 @@ public class ProjectionService extends Service {
                     String eraw = element.getText().trim();
 
                     int eAnchor = anchorIndex(eraw);
-                    if (eAnchor >= 0 && ey > 0.585f && ey < 0.665f) {
+                    if (eAnchor >= 0) {
                         foundX[eAnchor] = ex;
                         foundY[eAnchor] = ey;
                     }
 
                     float eAmountY = labelY - AMOUNT_ABOVE_LABEL;
-                    if (Math.abs(ey - eAmountY) <= 0.020f) {
+                    if (Math.abs(ey - eAmountY) <= 0.022f) {
                         int index = nearestTarget(ex);
                         double amount = parseAmount(eraw);
                         if (index >= 0 && amount >= 0 && frameValues[index] < 0) {
@@ -330,15 +364,18 @@ public class ProjectionService extends Service {
             }
         }
 
-        if (foundX[0] > 0 && foundX[1] > 0 && foundX[2] > 0) {
+        if (anchorsGeometryValid(foundX, foundY)) {
             float newY = (foundY[0] + foundY[1] + foundY[2]) / 3f;
             boolean changed = !anchorsLocked
                     || Math.abs(targetX[0] - foundX[0]) > 0.008f
+                    || Math.abs(targetX[1] - foundX[1]) > 0.008f
+                    || Math.abs(targetX[2] - foundX[2]) > 0.008f
                     || Math.abs(labelY - newY) > 0.008f;
 
             System.arraycopy(foundX, 0, targetX, 0, 3);
             labelY = newY;
             anchorsLocked = true;
+            lastAnchorSeenAt = now;
 
             if (changed) {
                 EventLog.log(this, String.format(Locale.ROOT,
@@ -350,17 +387,37 @@ public class ProjectionService extends Service {
                 && now - serviceStartedAt > 2500L) {
             fallbackLogged = true;
             EventLog.log(this,
-                    "ANCHOR_FALLBACK | Büyük 1-12 / 13-24 / 25-36 yazıları bulunamadı; ekran görüntüsünden ölçülen koordinatlar kullanılıyor");
+                    "ANCHOR_FALLBACK | Etiketler henüz bulunamadı; geçici yedek koordinatlar kullanılıyor");
         }
 
         if (frameCountdown != null) {
             updateCountdown(frameCountdown, now, text.getText());
         }
 
+        boolean anchorFreshForEmpty = anchorsLocked
+                && lastAnchorSeenAt > 0L
+                && now - lastAnchorSeenAt <= ANCHOR_FRESH_FOR_EMPTY_MS;
+
         for (int i = 0; i < 3; i++) {
-            if (frameValues[i] < 0 && inkRatios[i] < EMPTY_INK_MAX) {
-                frameValues[i] = 0d;
-                frameEmpty[i] = true;
+            if (frameValues[i] >= 0) {
+                emptyEvidence[i] = 0;
+                emptyEvidenceTimes[i] = 0L;
+            } else if (anchorFreshForEmpty && inkRatios[i] < EMPTY_INK_MAX) {
+                if (emptyEvidenceTimes[i] > 0L
+                        && now - emptyEvidenceTimes[i] <= EMPTY_CONFIRM_WINDOW_MS) {
+                    emptyEvidence[i]++;
+                } else {
+                    emptyEvidence[i] = 1;
+                }
+                emptyEvidenceTimes[i] = now;
+
+                if (emptyEvidence[i] >= EMPTY_CONFIRM_FRAMES) {
+                    frameValues[i] = 0d;
+                    frameEmpty[i] = true;
+                }
+            } else {
+                emptyEvidence[i] = 0;
+                emptyEvidenceTimes[i] = 0L;
             }
 
             if (frameValues[i] >= 0) {
@@ -398,10 +455,6 @@ public class ProjectionService extends Service {
                 ? TARGET_NAMES[max] + " + " + TARGET_NAMES[min]
                 : "YOK";
 
-        // Keep the latest ranking from the final seconds. We only use the
-        // immediately previous available late tick (2, otherwise 3) as a
-        // stability check at countdown=1. This avoids acting on last-second
-        // high/low flips while still tolerating an OCR-missed second.
         if (lastCountdownObserved != null && max >= 0 && min >= 0) {
             if (lastCountdownObserved == 3) latePlanC3 = plan;
             if (lastCountdownObserved == 2) latePlanC2 = plan;
@@ -454,7 +507,6 @@ public class ProjectionService extends Service {
         boolean adjacentGapsEnough = highMidGapRatio >= MIN_ADJACENT_GAP_RATIO
                 && midLowGapRatio >= MIN_ADJACENT_GAP_RATIO;
 
-        String previousLatePlan = !latePlanC2.isEmpty() ? latePlanC2 : latePlanC3;
         boolean latePlanStable;
         if (!latePlanC2.isEmpty()) {
             latePlanStable = plan.equals(latePlanC2)
@@ -545,7 +597,7 @@ public class ProjectionService extends Service {
                 EventLog.log(this, "TAP_BLOCKED | Erişilebilirlik servisi kapalı | plan=" + plan);
                 recordRoundOutcome("BLOCKED_A11Y", plan, max, min, spreadRatio);
                 TapAccessibilityService.updateOverlay(
-                        "FENASAL • TIKLAMA ENGELLENDİ\nErişilebilirlik servisi kapalı\nPLAN: " + plan);
+                        "FENA • TIKLAMA ENGELLENDİ\nErişilebilirlik servisi kapalı\nPLAN: " + plan);
             } else {
                 EventLog.log(this, String.format(Locale.ROOT,
                         "TAP_REQUEST | remaining=%.2f | plan=%s | y=%.3f",
@@ -563,14 +615,40 @@ public class ProjectionService extends Service {
                         true,
                         true);
 
-                recordRoundOutcome("BET_SENT", plan, max, min, spreadRatio);
-                TapAccessibilityService.tapPair(
-                        targetX[max], targetX[min], tapY,
-                        TARGET_NAMES[max], TARGET_NAMES[min]);
+                final int actionMax = max;
+                final int actionMin = min;
+                final String actionPlan = plan;
+                final double actionSpread = spreadRatio;
 
                 betPlaced = true;
                 oneSecondConfirmed = false;
                 lastTapTime = now;
+
+                TapAccessibilityService.tapPair(
+                        targetX[actionMax], targetX[actionMin], tapY,
+                        TARGET_NAMES[actionMax], TARGET_NAMES[actionMin],
+                        (firstOk, secondOk) -> {
+                            String outcome;
+                            if (firstOk && secondOk) {
+                                outcome = "BET_OK";
+                            } else if (firstOk || secondOk) {
+                                outcome = "BET_PARTIAL";
+                            } else {
+                                outcome = "BET_FAILED";
+                            }
+                            recordRoundOutcome(
+                                    outcome,
+                                    actionPlan,
+                                    actionMax,
+                                    actionMin,
+                                    actionSpread);
+                            if (!firstOk || !secondOk) {
+                                EventLog.log(ProjectionService.this,
+                                        "TAP_RESULT_ERROR | first=" + firstOk
+                                                + " second=" + secondOk
+                                                + " | plan=" + actionPlan);
+                            }
+                        });
             }
         }
     }
@@ -591,20 +669,41 @@ public class ProjectionService extends Service {
                 : now - previousObservedAt;
         boolean startCue = containsStartCue(rawOcr);
 
-        // A genuine new hand must follow the late end of the previous hand.
-        // This prevents one bad early OCR read (for example 12 -> 3) from
-        // splitting the same hand into two. If 10-14 are missed, a visible
-        // Başla/Basla cue still lets us recover from 9..5 after the old hand.
-        boolean previousHandEnded = previousObserved != null && previousObserved <= 3;
-        boolean newRound = !firstReading
-                && previousHandEnded
-                && gap > 3000L
-                && (value >= 10 || (value >= 5 && startCue))
-                && (lastTapTime == 0L || now - lastTapTime > 2500L);
+        boolean newRound = false;
+        if (!firstReading && previousObserved != null) {
+            boolean upwardJump = value >= previousObserved + 3;
+            boolean afterLow = previousObserved <= 5
+                    && value >= 8
+                    && gap > 900L;
+            boolean longGapHigh = gap > COUNTDOWN_MAX_AGE_MS
+                    && value >= 8;
+            boolean afterActionHigh = betPlaced
+                    && value >= 8
+                    && upwardJump
+                    && (lastTapTime == 0L || now - lastTapTime > 1200L);
+            boolean startCueReset = startCue
+                    && value >= 5
+                    && upwardJump
+                    && gap > 700L;
+
+            boolean resetSignal = afterLow || longGapHigh || afterActionHigh || startCueReset;
+            if (resetSignal) {
+                if (startCueReset || confirmRoundResetCandidate(value, now)) {
+                    newRound = true;
+                    clearRoundResetCandidate();
+                } else {
+                    EventLog.log(this,
+                            "ROUND_RESET_CANDIDATE | OCR=" + value
+                                    + " previous=" + previousObserved
+                                    + " gapMs=" + gap);
+                    return;
+                }
+            } else {
+                clearRoundResetCandidate();
+            }
+        }
 
         if (!firstReading && !newRound && previousObserved != null) {
-            // Countdown cannot realistically fall by 4+ seconds in a frame or
-            // two. Reject these early downward OCR jumps (e.g. 13 -> 3).
             if (previousObserved >= 6
                     && value <= previousObserved - 4
                     && gap <= 2500L) {
@@ -633,20 +732,14 @@ public class ProjectionService extends Service {
             startRound(now, value, "SYNC");
             EventLog.log(this, "ROUND_SYNC | geri sayım=" + value);
         } else if (newRound) {
-            finishRound(now, "NEXT_ROUND");
+            finishRound(now, "NEXT_ROUND_RECOVERED");
             betPlaced = false;
             oneSecondConfirmed = false;
             lastTapTime = 0L;
             startRound(now, value, "START");
-            if (value < 10) {
-                EventLog.log(this, "ROUND_RECOVERED | geri sayım=" + value
-                        + " | cue=" + (startCue ? "BASLA" : "FALLBACK"));
-            }
-            EventLog.log(this, "ROUND_START | geri sayım=" + value);
+            EventLog.log(this, "ROUND_START | geri sayım=" + value + " | recovered=YES");
         }
 
-        // NEVER tap just because OCR says "1". It must follow a recent genuine 2 or 3.
-        // This blocks the recurring bug where the on-screen "12" is misread as "1".
         boolean credibleOne = value == 1
                 && previousObserved != null
                 && previousObserved >= 2
@@ -672,7 +765,29 @@ public class ProjectionService extends Service {
         }
     }
 
+    private boolean confirmRoundResetCandidate(int value, long now) {
+        if (roundResetCandidate != null
+                && now - roundResetCandidateAt <= ROUND_RESET_CONFIRM_MS
+                && Math.abs(value - roundResetCandidate) <= 2) {
+            roundResetCandidateHits++;
+            roundResetCandidateAt = now;
+            roundResetCandidate = value;
+        } else {
+            roundResetCandidate = value;
+            roundResetCandidateAt = now;
+            roundResetCandidateHits = 1;
+        }
+        return roundResetCandidateHits >= 2;
+    }
+
+    private void clearRoundResetCandidate() {
+        roundResetCandidate = null;
+        roundResetCandidateAt = 0L;
+        roundResetCandidateHits = 0;
+    }
+
     private void startRound(long now, int countdown, String source) {
+        clearRoundValues();
         roundNumber++;
         roundStartedAt = now;
         roundOutcome = "NONE";
@@ -684,9 +799,23 @@ public class ProjectionService extends Service {
         lastRoundSnapshotSecond = -99;
         latePlanC2 = "";
         latePlanC3 = "";
+        lastPlan = "";
+        lastLoggedValues[0] = -999d;
+        lastLoggedValues[1] = -999d;
+        lastLoggedValues[2] = -999d;
         EventLog.log(this, "ROUND_BEGIN | hand=" + roundNumber
                 + " | source=" + source
                 + " | countdown=" + countdown);
+    }
+
+    private void clearRoundValues() {
+        for (int i = 0; i < 3; i++) {
+            lastValues[i] = -1d;
+            lastEmpty[i] = false;
+            valueTimes[i] = 0L;
+            emptyEvidence[i] = 0;
+            emptyEvidenceTimes[i] = 0L;
+        }
     }
 
     private void logRoundSnapshot(
@@ -744,8 +873,7 @@ public class ProjectionService extends Service {
             int min,
             double spreadRatio) {
 
-        // A real sent bet is the strongest outcome and may replace a prior A11Y block.
-        if (!"NONE".equals(roundOutcome) && !"BET_SENT".equals(outcome)) return;
+        if (!"NONE".equals(roundOutcome)) return;
         roundOutcome = outcome;
         roundOutcomePlan = plan;
         roundOutcomeValues[0] = lastValues[0];
@@ -825,18 +953,18 @@ public class ProjectionService extends Service {
 
         if (valuesChanged) {
             EventLog.log(this,
-                    "VALUES | " +
-                            TARGET_NAMES[0] + "=" + (fresh[0] ? formatAmount(lastValues[0]) : "?") +
-                            " | " + TARGET_NAMES[1] + "=" + (fresh[1] ? formatAmount(lastValues[1]) : "?") +
-                            " | " + TARGET_NAMES[2] + "=" + (fresh[2] ? formatAmount(lastValues[2]) : "?"));
+                    "VALUES | "
+                            + TARGET_NAMES[0] + "=" + (fresh[0] ? formatAmount(lastValues[0]) : "?")
+                            + " | " + TARGET_NAMES[1] + "=" + (fresh[1] ? formatAmount(lastValues[1]) : "?")
+                            + " | " + TARGET_NAMES[2] + "=" + (fresh[2] ? formatAmount(lastValues[2]) : "?"));
         }
 
         if (!plan.equals(lastPlan)) {
             lastPlan = plan;
             EventLog.log(this,
-                    "PLAN | " + plan +
-                            (max >= 0 ? " | HIGH=" + TARGET_NAMES[max] : "") +
-                            (min >= 0 ? " | LOW=" + TARGET_NAMES[min] : ""));
+                    "PLAN | " + plan
+                            + (max >= 0 ? " | HIGH=" + TARGET_NAMES[max] : "")
+                            + (min >= 0 ? " | LOW=" + TARGET_NAMES[min] : ""));
         }
 
         if (remaining >= 0d && remaining <= 5.2d) {
@@ -862,7 +990,7 @@ public class ProjectionService extends Service {
             String rawOcr) {
 
         StringBuilder sb = new StringBuilder();
-        sb.append("FENASAL • ");
+        sb.append("FENA • ");
         if (remaining >= 0d) {
             sb.append(String.format(Locale.ROOT, "%.1f sn", remaining));
         } else {
@@ -923,12 +1051,15 @@ public class ProjectionService extends Service {
     }
 
     private Integer chooseCountdown(Integer current, String raw, float cx, float cy) {
-        if (cx < 0.535f || cx > 0.650f || cy < 0.525f || cy > 0.575f) {
+        float expectedX = anchorsLocked ? targetX[1] : DEFAULT_X[1];
+        float expectedLabelY = anchorsLocked ? labelY : DEFAULT_LABEL_Y;
+        float minY = expectedLabelY - 0.145f;
+        float maxY = expectedLabelY - 0.048f;
+
+        if (Math.abs(cx - expectedX) > 0.13f || cy < minY || cy > maxY) {
             return current;
         }
 
-        // The game counts 15 -> 0. Parse the whole OCR line only. This prevents
-        // "12" from being interpreted as the separate element "2".
         String s = raw == null ? "" : raw.trim().replaceAll("\\s+", "");
         if (!s.matches("^(?:1[0-5]|[0-9])$")) return current;
 
@@ -938,6 +1069,21 @@ public class ProjectionService extends Service {
         } catch (NumberFormatException ignored) {
             return current;
         }
+    }
+
+    private boolean anchorsGeometryValid(float[] x, float[] y) {
+        if (x == null || y == null || x.length < 3 || y.length < 3) return false;
+        if (x[0] <= 0f || x[1] <= 0f || x[2] <= 0f) return false;
+        if (!(x[0] < x[1] && x[1] < x[2])) return false;
+
+        float gap1 = x[1] - x[0];
+        float gap2 = x[2] - x[1];
+        if (gap1 < 0.08f || gap2 < 0.08f || gap1 > 0.36f || gap2 > 0.36f) return false;
+
+        float minY = Math.min(y[0], Math.min(y[1], y[2]));
+        float maxY = Math.max(y[0], Math.max(y[1], y[2]));
+        float avgY = (y[0] + y[1] + y[2]) / 3f;
+        return maxY - minY <= 0.045f && avgY > 0.20f && avgY < 0.90f;
     }
 
     private int anchorIndex(String raw) {
@@ -1020,7 +1166,7 @@ public class ProjectionService extends Service {
 
     private void fail(String code, String detail) {
         EventLog.log(this, "ERROR | " + code + " | " + detail);
-        TapAccessibilityService.updateOverlay("FENASAL • HATA\n" + code + "\n" + detail);
+        TapAccessibilityService.updateOverlay("FENA • HATA\n" + code + "\n" + detail);
     }
 
     private String shortError(Throwable e) {
@@ -1035,7 +1181,7 @@ public class ProjectionService extends Service {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel channel = new NotificationChannel(
                     CHANNEL,
-                    "Fenasal ekran takibi",
+                    "Fena ekran takibi",
                     NotificationManager.IMPORTANCE_LOW);
             NotificationManager nm = getSystemService(NotificationManager.class);
             nm.createNotificationChannel(channel);

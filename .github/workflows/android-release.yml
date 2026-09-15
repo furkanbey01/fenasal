@@ -3,6 +3,8 @@ name: Build and Release APK
 on:
   push:
     branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
   workflow_dispatch:
 
 permissions:
@@ -15,6 +17,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -22,37 +26,57 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Restore stable Android signing key
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: fena-android-signing-v1
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
 
-      - name: Build APK
-        run: gradle :app:assembleDebug --stacktrace
+      - name: Verify version metadata
+        run: |
+          grep -q "versionCode 19" app/build.gradle
+          grep -q "versionName '1.0.19'" app/build.gradle
+          grep -q '<string name="app_name">Fena</string>' app/src/main/res/values/strings.xml
+
+      - name: Build signed release APK
+        run: gradle :app:assembleRelease --stacktrace
+
+      - name: Verify APK signature
+        run: |
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          test -n "$APKSIGNER"
+          "$APKSIGNER" verify --verbose app/build/outputs/apk/release/app-release.apk
 
       - name: Prepare APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk Fenasal.apk
+        run: cp app/build/outputs/apk/release/app-release.apk Fena.apk
 
-      - name: Keep only v1.0.18 release
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Fena-v1.0.19
+          path: Fena.apk
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release list --limit 100 --json tagName --jq '.[].tagName' | while read -r tag; do
-            if [ -n "$tag" ] && [ "$tag" != "v1.0.18" ]; then
-              gh release delete "$tag" --cleanup-tag --yes || true
-            fi
-          done
+          VERSION="$(sed -n "s/.*versionName '\([^']*\)'.*/\1/p" app/build.gradle | head -n 1)"
+          TAG="v${VERSION}"
+          test -n "$VERSION"
 
-      - name: Update v1.0.18 APK
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          git tag -f v1.0.18 "$GITHUB_SHA"
-          git push origin -f refs/tags/v1.0.18
-          if gh release view v1.0.18 >/dev/null 2>&1; then
-            gh release upload v1.0.18 Fenasal.apk --clobber
-          else
-            gh release create v1.0.18 Fenasal.apk \
-              --title "Fenasal v1.0.18" \
-              --notes "Baz sürüm: v1.0.18. Yalnızca overlay sürekli görünür olacak şekilde korunmuştur."
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "$TAG zaten yayınlanmış; mevcut release değiştirilmiyor."
+            exit 0
           fi
+
+          gh release create "$TAG" Fena.apk \
+            --target "$GITHUB_SHA" \
+            --title "Fena $TAG" \
+            --notes "Fena $TAG: dinamik ekran konumu takibi, güvenli BOŞ doğrulaması, OCR tur geçişi kurtarma, hızlı ve doğrulanmış çift dokunma, asenkron log yazımı, sürüm düzeni ve yıldırım logosu."

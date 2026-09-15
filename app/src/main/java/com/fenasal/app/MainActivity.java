@@ -53,7 +53,7 @@ public class MainActivity extends AppCompatActivity {
                             ContextCompat.startForegroundService(this, service);
 
                             statusText.setText(
-                                    "Durum: Çalışıyor. Oyuna dön; ekrandaki Fenasal panelini izle.");
+                                    "Durum: Çalışıyor. Oyuna dön; ekrandaki Fena panelini izle.");
                         } else {
                             EventLog.log(this, "UI_ERROR | Ekran yakalama izni verilmedi");
                             statusText.setText(
@@ -117,7 +117,7 @@ public class MainActivity extends AppCompatActivity {
             ClipboardManager clipboard =
                     (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
             clipboard.setPrimaryClip(
-                    ClipData.newPlainText("Fenasal kayıtları", logs));
+                    ClipData.newPlainText("Fena kayıtları", logs));
             Toast.makeText(
                     this,
                     "Tüm kayıtlar panoya kopyalandı",
