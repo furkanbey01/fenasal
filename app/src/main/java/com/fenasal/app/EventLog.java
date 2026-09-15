@@ -13,76 +13,117 @@ import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 public final class EventLog {
-    private static final String FILE_NAME = "fenasal.log";
+    private static final String FILE_NAME = "fena.log";
     private static final long MAX_FILE_BYTES = 8_000_000L;
     private static final int KEEP_LINES_ON_ROTATE = 40_000;
+    private static final Object FILE_LOCK = new Object();
+
+    private static final ExecutorService WRITER = Executors.newSingleThreadExecutor(r -> {
+        Thread thread = new Thread(r, "FenaLogWriter");
+        thread.setDaemon(true);
+        return thread;
+    });
+
+    private static final ThreadLocal<SimpleDateFormat> TIME_FORMAT =
+            ThreadLocal.withInitial(() -> new SimpleDateFormat(
+                    "yyyy-MM-dd HH:mm:ss.SSS",
+                    Locale.ROOT));
 
     private EventLog() { }
 
-    public static synchronized void log(Context context, String message) {
+    public static void log(Context context, String message) {
         if (context == null || message == null) return;
-        try {
-            File file = new File(context.getFilesDir(), FILE_NAME);
-            rotateIfNeeded(file);
 
-            String time = new SimpleDateFormat(
-                    "yyyy-MM-dd HH:mm:ss.SSS",
-                    Locale.ROOT).format(new Date());
+        Context appContext = context.getApplicationContext();
+        String time = TIME_FORMAT.get().format(new Date());
+        String line = time + " | " + message.replace('\n', ' ') + "\n";
 
-            String line = time + " | " + message.replace('\n', ' ') + "\n";
-            try (FileOutputStream out = new FileOutputStream(file, true)) {
-                out.write(line.getBytes(StandardCharsets.UTF_8));
-            }
-        } catch (Exception ignored) { }
+        WRITER.execute(() -> writeLine(appContext, line));
     }
 
-    public static synchronized String read(Context context, int maxChars) {
+    public static String read(Context context, int maxChars) {
         if (context == null) return "";
+        flushPending();
+
         File file = new File(context.getFilesDir(), FILE_NAME);
         if (!file.exists()) return "Henüz kayıt yok.";
 
-        try {
-            List<String> lines = readAllLines(file);
-            StringBuilder sb = new StringBuilder();
-            for (int i = lines.size() - 1; i >= 0; i--) {
-                String line = lines.get(i);
-                if (sb.length() + line.length() + 1 > maxChars && sb.length() > 0) break;
-                sb.insert(0, line + "\n");
-            }
-            return sb.toString();
-        } catch (Exception e) {
-            return "Kayıt okunamadı: " + e.getMessage();
-        }
-    }
-
-    public static synchronized String readAll(Context context) {
-        if (context == null) return "";
-        File file = new File(context.getFilesDir(), FILE_NAME);
-        if (!file.exists()) return "Henüz kayıt yok.";
-
-        try {
-            List<String> lines = readAllLines(file);
-            StringBuilder sb = new StringBuilder();
-            for (String line : lines) {
-                sb.append(line).append('\n');
-            }
-            return sb.toString();
-        } catch (Exception e) {
-            return "Kayıt okunamadı: " + e.getMessage();
-        }
-    }
-
-    public static synchronized void clear(Context context) {
-        if (context == null) return;
-        try {
-            File file = new File(context.getFilesDir(), FILE_NAME);
-            if (file.exists()) {
-                try (FileOutputStream out = new FileOutputStream(file, false)) {
-                    out.write(new byte[0]);
+        synchronized (FILE_LOCK) {
+            try {
+                List<String> lines = readAllLines(file);
+                StringBuilder sb = new StringBuilder();
+                for (int i = lines.size() - 1; i >= 0; i--) {
+                    String line = lines.get(i);
+                    if (sb.length() + line.length() + 1 > maxChars && sb.length() > 0) break;
+                    sb.insert(0, line + "\n");
                 }
+                return sb.toString();
+            } catch (Exception e) {
+                return "Kayıt okunamadı: " + e.getMessage();
             }
+        }
+    }
+
+    public static String readAll(Context context) {
+        if (context == null) return "";
+        flushPending();
+
+        File file = new File(context.getFilesDir(), FILE_NAME);
+        if (!file.exists()) return "Henüz kayıt yok.";
+
+        synchronized (FILE_LOCK) {
+            try {
+                List<String> lines = readAllLines(file);
+                StringBuilder sb = new StringBuilder();
+                for (String line : lines) {
+                    sb.append(line).append('\n');
+                }
+                return sb.toString();
+            } catch (Exception e) {
+                return "Kayıt okunamadı: " + e.getMessage();
+            }
+        }
+    }
+
+    public static void clear(Context context) {
+        if (context == null) return;
+        flushPending();
+
+        synchronized (FILE_LOCK) {
+            try {
+                File file = new File(context.getFilesDir(), FILE_NAME);
+                if (file.exists()) {
+                    try (FileOutputStream out = new FileOutputStream(file, false)) {
+                        out.write(new byte[0]);
+                    }
+                }
+            } catch (Exception ignored) { }
+        }
+    }
+
+    private static void writeLine(Context context, String line) {
+        synchronized (FILE_LOCK) {
+            try {
+                File file = new File(context.getFilesDir(), FILE_NAME);
+                rotateIfNeeded(file);
+                try (FileOutputStream out = new FileOutputStream(file, true)) {
+                    out.write(line.getBytes(StandardCharsets.UTF_8));
+                }
+            } catch (Exception ignored) { }
+        }
+    }
+
+    private static void flushPending() {
+        CountDownLatch latch = new CountDownLatch(1);
+        try {
+            WRITER.execute(latch::countDown);
+            latch.await(900L, TimeUnit.MILLISECONDS);
         } catch (Exception ignored) { }
     }
 
