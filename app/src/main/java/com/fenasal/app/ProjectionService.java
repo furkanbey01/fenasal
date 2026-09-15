@@ -591,12 +591,29 @@ public class ProjectionService extends Service {
                 : now - previousObservedAt;
         boolean startCue = containsStartCue(rawOcr);
 
+        // A genuine new hand must follow the late end of the previous hand.
+        // This prevents one bad early OCR read (for example 12 -> 3) from
+        // splitting the same hand into two. If 10-14 are missed, a visible
+        // Başla/Basla cue still lets us recover from 9..5 after the old hand.
+        boolean previousHandEnded = previousObserved != null && previousObserved <= 3;
         boolean newRound = !firstReading
+                && previousHandEnded
                 && gap > 3000L
                 && (value >= 10 || (value >= 5 && startCue))
                 && (lastTapTime == 0L || now - lastTapTime > 2500L);
 
         if (!firstReading && !newRound && previousObserved != null) {
+            // Countdown cannot realistically fall by 4+ seconds in a frame or
+            // two. Reject these early downward OCR jumps (e.g. 13 -> 3).
+            if (previousObserved >= 6
+                    && value <= previousObserved - 4
+                    && gap <= 2500L) {
+                EventLog.log(this, "COUNTDOWN_REJECT_DOWN | OCR=" + value
+                        + " previous=" + previousObserved
+                        + " gapMs=" + gap);
+                return;
+            }
+
             if (value > previousObserved + 1) {
                 EventLog.log(this, "COUNTDOWN_REJECT_UP | OCR=" + value
                         + " previous=" + previousObserved);
