@@ -1,0 +1,39 @@
+name: Apply v1.0.20 bet trigger fix
+
+on:
+  push:
+    branches: [ "fena-v1.0.20-bet-trigger-fix" ]
+    paths:
+      - '.github/workflows/patch-v1020.yml'
+      - 'tools/patch_v1020.py'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: fena-v1.0.20-bet-trigger-fix
+
+      - name: Apply patch
+        run: python tools/patch_v1020.py
+
+      - name: Verify patch markers
+        run: |
+          grep -q 'ONE_SECOND_ESTIMATED' app/src/main/java/com/fenasal/app/ProjectionService.java
+          grep -q 'BET_GATE' app/src/main/java/com/fenasal/app/ProjectionService.java
+          grep -q 'versionCode 20' app/build.gradle
+          grep -q "versionName '1.0.20'" app/build.gradle
+
+      - name: Commit patched files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/fenasal/app/ProjectionService.java app/build.gradle .github/workflows/android-release.yml
+          git diff --cached --check
+          git commit -m "Fix v1.0.19 bet trigger regression"
+          git push origin HEAD:fena-v1.0.20-bet-trigger-fix
