@@ -13,7 +13,7 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="FENASAL 😂"
+            android:text="FENA ⚡"
             android:textSize="28sp"
             android:textStyle="bold"
             android:layout_gravity="center_horizontal"
@@ -51,7 +51,7 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Son 5 saniyede oyun ekranının üstünde YÜKSEK ve DÜŞÜK/BOŞ seçenekler çerçeveyle işaretlenir. Son 2 saniyede iki hedefe otomatik dokunur. Ekran üstü panel, okunan değerleri ve planı canlı gösterir."
+            android:text="Son 5 saniyede oyun ekranının üstünde YÜKSEK ve DÜŞÜK/BOŞ seçenekler çerçeveyle işaretlenir. Son aşamada iki hedefe otomatik dokunur. Ekran üstü panel, okunan değerleri ve planı canlı gösterir."
             android:textSize="14sp"
             android:paddingTop="18dp"
             android:paddingBottom="16dp" />
