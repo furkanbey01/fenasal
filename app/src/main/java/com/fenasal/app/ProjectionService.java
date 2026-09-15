@@ -56,7 +56,8 @@ public class ProjectionService extends Service {
     private static final long VALUE_FRESH_MS = 1200L;
     private static final long COUNTDOWN_MAX_AGE_MS = 6500L;
     private static final float EMPTY_INK_MAX = 0.0065f;
-    private static final double MIN_BET_SPREAD_RATIO = 0.35d;
+    private static final double MIN_BET_SPREAD_RATIO = 0.60d;
+    private static final double MIN_ADJACENT_GAP_RATIO = 0.10d;
 
     private MediaProjection projection;
     private VirtualDisplay virtualDisplay;
@@ -100,6 +101,8 @@ public class ProjectionService extends Service {
     private final double[] roundOutcomeValues = {-1d, -1d, -1d};
     private double roundOutcomeSpread = -1d;
     private int lastRoundSnapshotSecond = -99;
+    private String latePlanC2 = "";
+    private String latePlanC3 = "";
 
     @Override
     public void onCreate() {
@@ -395,6 +398,15 @@ public class ProjectionService extends Service {
                 ? TARGET_NAMES[max] + " + " + TARGET_NAMES[min]
                 : "YOK";
 
+        // Keep the latest ranking from the final seconds. We only use the
+        // immediately previous available late tick (2, otherwise 3) as a
+        // stability check at countdown=1. This avoids acting on last-second
+        // high/low flips while still tolerating an OCR-missed second.
+        if (lastCountdownObserved != null && max >= 0 && min >= 0) {
+            if (lastCountdownObserved == 3) latePlanC3 = plan;
+            if (lastCountdownObserved == 2) latePlanC2 = plan;
+        }
+
         logRoundSnapshot(
                 now, lastCountdownObserved, fresh, max, min, plan, inkRatios, text.getText());
         logStateChanges(now, remaining, fresh, max, min, plan, text.getText(), inkRatios);
@@ -432,6 +444,40 @@ public class ProjectionService extends Service {
                 : -1d;
         boolean spreadEnough = spreadRatio >= MIN_BET_SPREAD_RATIO;
 
+        int middle = (max >= 0 && min >= 0 && max != min) ? 3 - max - min : -1;
+        double highMidGapRatio = (middle >= 0 && lastValues[max] > 0d)
+                ? (lastValues[max] - lastValues[middle]) / lastValues[max]
+                : -1d;
+        double midLowGapRatio = (middle >= 0 && lastValues[middle] > 0d)
+                ? (lastValues[middle] - lastValues[min]) / lastValues[middle]
+                : -1d;
+        boolean adjacentGapsEnough = highMidGapRatio >= MIN_ADJACENT_GAP_RATIO
+                && midLowGapRatio >= MIN_ADJACENT_GAP_RATIO;
+
+        String previousLatePlan = !latePlanC2.isEmpty() ? latePlanC2 : latePlanC3;
+        boolean latePlanStable = !previousLatePlan.isEmpty() && plan.equals(previousLatePlan);
+        boolean strategyPass = spreadEnough && adjacentGapsEnough && latePlanStable;
+
+        if (!betPlaced
+                && lastFive
+                && oneSecondConfirmed
+                && freshCount == 3
+                && max >= 0
+                && min >= 0
+                && max != min) {
+            EventLog.log(this, String.format(Locale.ROOT,
+                    "STRATEGY_CHECK | hand=%d | plan=%s | prev=%s | spread=%.1f%%"
+                            + " | highMid=%.1f%% | midLow=%.1f%% | stable=%s | pass=%s",
+                    roundNumber,
+                    plan,
+                    previousLatePlan.isEmpty() ? "YOK" : previousLatePlan,
+                    spreadRatio * 100d,
+                    highMidGapRatio * 100d,
+                    midLowGapRatio * 100d,
+                    latePlanStable ? "YES" : "NO",
+                    strategyPass ? "YES" : "NO"));
+        }
+
         if (!betPlaced
                 && lastFive
                 && oneSecondConfirmed
@@ -458,7 +504,34 @@ public class ProjectionService extends Service {
                 && max >= 0
                 && min >= 0
                 && max != min
-                && spreadEnough) {
+                && spreadEnough
+                && (!adjacentGapsEnough || !latePlanStable)) {
+            String reason = (!latePlanStable ? "UNSTABLE_PLAN" : "")
+                    + (!latePlanStable && !adjacentGapsEnough ? "+" : "")
+                    + (!adjacentGapsEnough ? "AMBIGUOUS_RANKING" : "");
+            EventLog.log(this, String.format(Locale.ROOT,
+                    "STRATEGY_SKIP | hand=%d | reason=%s | plan=%s | prev=%s"
+                            + " | spread=%.1f%% | highMid=%.1f%% | midLow=%.1f%%",
+                    roundNumber,
+                    reason,
+                    plan,
+                    previousLatePlan.isEmpty() ? "YOK" : previousLatePlan,
+                    spreadRatio * 100d,
+                    highMidGapRatio * 100d,
+                    midLowGapRatio * 100d));
+            recordRoundOutcome("SKIP_STRATEGY", plan, max, min, spreadRatio);
+            betPlaced = true;
+            oneSecondConfirmed = false;
+        }
+
+        if (!betPlaced
+                && lastFive
+                && oneSecondConfirmed
+                && freshCount == 3
+                && max >= 0
+                && min >= 0
+                && max != min
+                && strategyPass) {
 
             if (!accessibility) {
                 EventLog.log(this, "TAP_BLOCKED | Erişilebilirlik servisi kapalı | plan=" + plan);
@@ -574,6 +647,8 @@ public class ProjectionService extends Service {
         roundOutcomeValues[2] = -1d;
         roundOutcomeSpread = -1d;
         lastRoundSnapshotSecond = -99;
+        latePlanC2 = "";
+        latePlanC3 = "";
         EventLog.log(this, "ROUND_BEGIN | hand=" + roundNumber
                 + " | source=" + source
                 + " | countdown=" + countdown);
