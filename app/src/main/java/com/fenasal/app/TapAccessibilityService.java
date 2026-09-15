@@ -16,8 +16,16 @@ import android.view.accessibility.AccessibilityEvent;
 import android.widget.TextView;
 
 public class TapAccessibilityService extends AccessibilityService {
+    public interface TapPairCallback {
+        void onFinished(boolean firstOk, boolean secondOk);
+    }
+
+    private interface SingleTapCallback {
+        void onFinished(boolean success);
+    }
+
     private static TapAccessibilityService instance;
-    private static String lastStatus = "FENASAL\nEkran okuma bekleniyor...";
+    private static String lastStatus = "FENA\nEkran okuma bekleniyor...";
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private WindowManager windowManager;
@@ -108,19 +116,27 @@ public class TapAccessibilityService extends AccessibilityService {
             float secondX,
             float yRatio,
             String firstLabel,
-            String secondLabel) {
+            String secondLabel,
+            TapPairCallback callback) {
 
         TapAccessibilityService service = instance;
-        if (service == null) return;
+        if (service == null) {
+            if (callback != null) callback.onFinished(false, false);
+            return;
+        }
 
         EventLog.log(service,
-                "GESTURE_PAIR | 1=" + firstLabel + " 2=" + secondLabel +
-                        " | x=" + firstX + "," + secondX + " y=" + yRatio);
+                "GESTURE_PAIR | 1=" + firstLabel + " 2=" + secondLabel
+                        + " | x=" + firstX + "," + secondX + " y=" + yRatio);
 
-        service.tap(firstX, yRatio, firstLabel);
-        service.handler.postDelayed(
-                () -> service.tap(secondX, yRatio, secondLabel),
-                220L);
+        service.tap(firstX, yRatio, firstLabel, firstOk ->
+                service.handler.postDelayed(() ->
+                        service.tap(secondX, yRatio, secondLabel, secondOk -> {
+                            EventLog.log(service,
+                                    "GESTURE_PAIR_RESULT | 1=" + (firstOk ? "OK" : "FAIL")
+                                            + " | 2=" + (secondOk ? "OK" : "FAIL"));
+                            if (callback != null) callback.onFinished(firstOk, secondOk);
+                        }), 20L));
     }
 
     private void showOverlays() {
@@ -150,7 +166,7 @@ public class TapAccessibilityService extends AccessibilityService {
         GradientDrawable bg = new GradientDrawable();
         bg.setColor(0xE61B1B1F);
         bg.setCornerRadius(dp(14));
-        bg.setStroke(dp(1), 0xFF7C4DFF);
+        bg.setStroke(dp(1), 0xFFFFC107);
         bubble.setBackground(bg);
 
         bubbleParams = new WindowManager.LayoutParams(
@@ -229,7 +245,7 @@ public class TapAccessibilityService extends AccessibilityService {
             String firstLine = text;
             int newline = text.indexOf('\n');
             if (newline > 0) firstLine = text.substring(0, newline);
-            firstLine = firstLine.replace("FENASAL • ", "");
+            firstLine = firstLine.replace("FENA • ", "");
             bubble.setText("F • " + firstLine);
         }
     }
@@ -253,7 +269,12 @@ public class TapAccessibilityService extends AccessibilityService {
         markerParams = null;
     }
 
-    private void tap(float xRatio, float yRatio, String label) {
+    private void tap(
+            float xRatio,
+            float yRatio,
+            String label,
+            SingleTapCallback callback) {
+
         WindowManager wm = (WindowManager) getSystemService(WINDOW_SERVICE);
         DisplayMetrics dm = new DisplayMetrics();
         wm.getDefaultDisplay().getRealMetrics(dm);
@@ -265,7 +286,7 @@ public class TapAccessibilityService extends AccessibilityService {
         path.moveTo(x, y);
 
         GestureDescription.StrokeDescription stroke =
-                new GestureDescription.StrokeDescription(path, 0, 75);
+                new GestureDescription.StrokeDescription(path, 0, 35);
         GestureDescription gesture =
                 new GestureDescription.Builder().addStroke(stroke).build();
 
@@ -283,6 +304,7 @@ public class TapAccessibilityService extends AccessibilityService {
                         EventLog.log(
                                 TapAccessibilityService.this,
                                 "GESTURE_OK | " + label);
+                        if (callback != null) callback.onFinished(true);
                     }
 
                     @Override
@@ -292,7 +314,8 @@ public class TapAccessibilityService extends AccessibilityService {
                                 TapAccessibilityService.this,
                                 "GESTURE_CANCELLED | " + label);
                         updateOverlay(
-                                "FENASAL • DOKUNMA HATASI\nAndroid hareketi iptal etti: " + label);
+                                "FENA • DOKUNMA HATASI\nAndroid hareketi iptal etti: " + label);
+                        if (callback != null) callback.onFinished(false);
                     }
                 },
                 null);
@@ -300,7 +323,8 @@ public class TapAccessibilityService extends AccessibilityService {
         if (!accepted) {
             EventLog.log(this, "GESTURE_REJECTED | " + label);
             updateOverlay(
-                    "FENASAL • DOKUNMA HATASI\ndispatchGesture kabul etmedi: " + label);
+                    "FENA • DOKUNMA HATASI\ndispatchGesture kabul etmedi: " + label);
+            if (callback != null) callback.onFinished(false);
         }
     }
 
