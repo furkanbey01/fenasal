@@ -1,4 +1,4 @@
-name: Full per-hand logging
+name: Strategy v2 quality gate
 
 on:
   push:
@@ -15,16 +15,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Apply full logging patch
-        run: python tools/patch_full_round_logging.py
+      - name: Apply strategy v2 patch
+        run: python tools/patch_strategy_v2.py
 
-      - name: Commit logging changes
+      - name: Commit strategy changes
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add app/src/main/java/com/fenasal/app/ProjectionService.java \
-                  app/src/main/java/com/fenasal/app/EventLog.java \
-                  app/src/main/java/com/fenasal/app/MainActivity.java
+          git add app/src/main/java/com/fenasal/app/ProjectionService.java
           git diff --cached --check
-          git commit -m "Log complete per-hand history"
+          git commit -m "Add strategy v2 quality gate"
           git push
