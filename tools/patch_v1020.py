@@ -30,14 +30,3 @@ b = build.read_text(encoding='utf-8')
 b = b.replace('versionCode 19', 'versionCode 20', 1)
 b = b.replace("versionName '1.0.19'", "versionName '1.0.20'", 1)
 build.write_text(b, encoding='utf-8')
-
-workflow = Path('.github/workflows/android-release.yml')
-w = workflow.read_text(encoding='utf-8')
-w = w.replace('versionCode 19', 'versionCode 20', 1)
-w = w.replace("versionName '1.0.19'", "versionName '1.0.20'", 1)
-w = w.replace('name: Fena-v1.0.19', 'name: Fena-v1.0.20', 1)
-w = w.replace(
-    'Fena $TAG: dinamik ekran konumu takibi, güvenli BOŞ doğrulaması, OCR tur geçişi kurtarma, hızlı ve doğrulanmış çift dokunma, asenkron log yazımı, sürüm düzeni ve yıldırım logosu.',
-    'Fena $TAG: v1.0.19 bahis tetikleme regresyonu düzeltildi; hızlı OCR alanı, final saniye zaman tahmini, daha dayanıklı değer tazeliği ve ayrıntılı BET_GATE tanısı eklendi. Strateji eşikleri değiştirilmedi.',
-    1)
-workflow.write_text(w, encoding='utf-8')
