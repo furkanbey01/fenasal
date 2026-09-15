@@ -1,4 +1,4 @@
-name: Strategy v2 quality gate
+name: Strategy v3 stability and round recovery
 
 on:
   push:
@@ -15,8 +15,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Apply strategy v2 patch
-        run: python tools/patch_strategy_v2.py
+      - name: Apply strategy v3 patch
+        run: python tools/patch_strategy_v3.py
 
       - name: Commit strategy changes
         run: |
@@ -24,5 +24,5 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add app/src/main/java/com/fenasal/app/ProjectionService.java
           git diff --cached --check
-          git commit -m "Add strategy v2 quality gate"
+          git commit -m "Add strategy v3 round recovery"
           git push
