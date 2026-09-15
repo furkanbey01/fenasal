@@ -32,7 +32,7 @@ public class MainActivity extends AppCompatActivity {
         @Override
         public void run() {
             if (logText != null) {
-                logText.setText(EventLog.read(MainActivity.this, 28_000));
+                logText.setText(EventLog.read(MainActivity.this, 120_000));
             }
             uiHandler.postDelayed(this, 1000L);
         }
@@ -110,24 +110,24 @@ public class MainActivity extends AppCompatActivity {
         });
 
         refreshLogButton.setOnClickListener(v ->
-                logText.setText(EventLog.read(this, 28_000)));
+                logText.setText(EventLog.read(this, 120_000)));
 
         copyLogButton.setOnClickListener(v -> {
-            String logs = EventLog.read(this, 60_000);
+            String logs = EventLog.readAll(this);
             ClipboardManager clipboard =
                     (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
             clipboard.setPrimaryClip(
                     ClipData.newPlainText("Fenasal kayıtları", logs));
             Toast.makeText(
                     this,
-                    "Kayıtlar panoya kopyalandı",
+                    "Tüm kayıtlar panoya kopyalandı",
                     Toast.LENGTH_SHORT).show();
         });
 
         clearLogButton.setOnClickListener(v -> {
             EventLog.clear(this);
             EventLog.log(this, "LOG_CLEAR | Kayıtlar kullanıcı tarafından temizlendi");
-            logText.setText(EventLog.read(this, 28_000));
+            logText.setText(EventLog.read(this, 120_000));
         });
 
         EventLog.log(this, "UI_OPEN | Ana ekran açıldı");

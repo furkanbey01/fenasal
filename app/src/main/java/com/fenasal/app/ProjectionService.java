@@ -91,6 +91,16 @@ public class ProjectionService extends Service {
     private final double[] lastLoggedValues = {-999d, -999d, -999d};
     private long lastMissLogAt;
 
+    // Full per-hand logging. These fields are observational only; they do not
+    // participate in target selection or tap timing.
+    private int roundNumber;
+    private long roundStartedAt;
+    private String roundOutcome = "NONE";
+    private String roundOutcomePlan = "YOK";
+    private final double[] roundOutcomeValues = {-1d, -1d, -1d};
+    private double roundOutcomeSpread = -1d;
+    private int lastRoundSnapshotSecond = -99;
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -385,6 +395,8 @@ public class ProjectionService extends Service {
                 ? TARGET_NAMES[max] + " + " + TARGET_NAMES[min]
                 : "YOK";
 
+        logRoundSnapshot(
+                now, lastCountdownObserved, fresh, max, min, plan, inkRatios, text.getText());
         logStateChanges(now, remaining, fresh, max, min, plan, text.getText(), inkRatios);
 
         String diagnostics = buildDiagnostics(
@@ -434,6 +446,7 @@ public class ProjectionService extends Service {
                     formatAmount(lastValues[min]),
                     spreadRatio * 100d,
                     MIN_BET_SPREAD_RATIO * 100d));
+            recordRoundOutcome("SKIP_CLOSE", plan, max, min, spreadRatio);
             betPlaced = true;
             oneSecondConfirmed = false;
         }
@@ -449,6 +462,7 @@ public class ProjectionService extends Service {
 
             if (!accessibility) {
                 EventLog.log(this, "TAP_BLOCKED | Erişilebilirlik servisi kapalı | plan=" + plan);
+                recordRoundOutcome("BLOCKED_A11Y", plan, max, min, spreadRatio);
                 TapAccessibilityService.updateOverlay(
                         "FENASAL • TIKLAMA ENGELLENDİ\nErişilebilirlik servisi kapalı\nPLAN: " + plan);
             } else {
@@ -468,6 +482,7 @@ public class ProjectionService extends Service {
                         true,
                         true);
 
+                recordRoundOutcome("BET_SENT", plan, max, min, spreadRatio);
                 TapAccessibilityService.tapPair(
                         targetX[max], targetX[min], tapY,
                         TARGET_NAMES[max], TARGET_NAMES[min]);
@@ -511,11 +526,14 @@ public class ProjectionService extends Service {
         if (firstReading) {
             betPlaced = false;
             oneSecondConfirmed = false;
+            startRound(now, value, "SYNC");
             EventLog.log(this, "ROUND_SYNC | geri sayım=" + value);
         } else if (newRound) {
+            finishRound(now, "NEXT_ROUND");
             betPlaced = false;
             oneSecondConfirmed = false;
             lastTapTime = 0L;
+            startRound(now, value, "START");
             EventLog.log(this, "ROUND_START | geri sayım=" + value);
         }
 
@@ -544,6 +562,128 @@ public class ProjectionService extends Service {
             lastLoggedSecond = value;
             EventLog.log(this, "COUNTDOWN | " + value);
         }
+    }
+
+    private void startRound(long now, int countdown, String source) {
+        roundNumber++;
+        roundStartedAt = now;
+        roundOutcome = "NONE";
+        roundOutcomePlan = "YOK";
+        roundOutcomeValues[0] = -1d;
+        roundOutcomeValues[1] = -1d;
+        roundOutcomeValues[2] = -1d;
+        roundOutcomeSpread = -1d;
+        lastRoundSnapshotSecond = -99;
+        EventLog.log(this, "ROUND_BEGIN | hand=" + roundNumber
+                + " | source=" + source
+                + " | countdown=" + countdown);
+    }
+
+    private void logRoundSnapshot(
+            long now,
+            Integer countdown,
+            boolean[] fresh,
+            int max,
+            int min,
+            String plan,
+            float[] inkRatios,
+            String rawOcr) {
+
+        if (roundStartedAt <= 0L || countdown == null) return;
+        if (countdown == lastRoundSnapshotSecond) return;
+        lastRoundSnapshotSecond = countdown;
+
+        double spread = (max >= 0 && min >= 0 && lastValues[max] > 0d)
+                ? (lastValues[max] - lastValues[min]) / lastValues[max]
+                : -1d;
+        String spreadText = spread >= 0d
+                ? String.format(Locale.ROOT, "%.1f%%", spread * 100d)
+                : "NA";
+        String freshMask = (fresh[0] ? "1" : "0")
+                + (fresh[1] ? "1" : "0")
+                + (fresh[2] ? "1" : "0");
+        String emptyMask = (lastEmpty[0] ? "1" : "0")
+                + (lastEmpty[1] ? "1" : "0")
+                + (lastEmpty[2] ? "1" : "0");
+
+        EventLog.log(this, String.format(Locale.ROOT,
+                "ROUND_TICK | hand=%d | c=%d | elapsed=%.2fs"
+                        + " | values=%s,%s,%s | fresh=%s | empty=%s"
+                        + " | high=%s | low=%s | spread=%s | plan=%s"
+                        + " | ink=%.4f,%.4f,%.4f | OCR=%s",
+                roundNumber,
+                countdown,
+                (now - roundStartedAt) / 1000d,
+                fresh[0] ? formatAmount(lastValues[0]) : "?",
+                fresh[1] ? formatAmount(lastValues[1]) : "?",
+                fresh[2] ? formatAmount(lastValues[2]) : "?",
+                freshMask,
+                emptyMask,
+                max >= 0 ? TARGET_NAMES[max] : "YOK",
+                min >= 0 ? TARGET_NAMES[min] : "YOK",
+                spreadText,
+                plan,
+                inkRatios[0], inkRatios[1], inkRatios[2],
+                cleanOcr(rawOcr)));
+    }
+
+    private void recordRoundOutcome(
+            String outcome,
+            String plan,
+            int max,
+            int min,
+            double spreadRatio) {
+
+        // A real sent bet is the strongest outcome and may replace a prior A11Y block.
+        if (!"NONE".equals(roundOutcome) && !"BET_SENT".equals(outcome)) return;
+        roundOutcome = outcome;
+        roundOutcomePlan = plan;
+        roundOutcomeValues[0] = lastValues[0];
+        roundOutcomeValues[1] = lastValues[1];
+        roundOutcomeValues[2] = lastValues[2];
+        roundOutcomeSpread = spreadRatio;
+
+        EventLog.log(this,
+                "ROUND_DECISION | hand=" + roundNumber
+                        + " | action=" + outcome
+                        + " | plan=" + plan
+                        + " | values=" + formatAmount(lastValues[0])
+                        + "," + formatAmount(lastValues[1])
+                        + "," + formatAmount(lastValues[2])
+                        + " | high=" + (max >= 0 ? TARGET_NAMES[max] : "YOK")
+                        + " | low=" + (min >= 0 ? TARGET_NAMES[min] : "YOK")
+                        + " | spread=" + (spreadRatio >= 0d
+                            ? String.format(Locale.ROOT, "%.1f%%", spreadRatio * 100d)
+                            : "NA"));
+    }
+
+    private void finishRound(long now, String reason) {
+        if (roundStartedAt <= 0L || roundNumber <= 0) return;
+        String action = "NONE".equals(roundOutcome) ? "NO_ACTION" : roundOutcome;
+        String spreadText = roundOutcomeSpread >= 0d
+                ? String.format(Locale.ROOT, "%.1f%%", roundOutcomeSpread * 100d)
+                : "NA";
+
+        EventLog.log(this, String.format(Locale.ROOT,
+                "ROUND_SUMMARY | hand=%d | duration=%.2fs | action=%s | plan=%s"
+                        + " | actionValues=%s,%s,%s | actionSpread=%s"
+                        + " | finalValues=%s,%s,%s | lastCountdown=%s"
+                        + " | a11y=%s | end=%s",
+                roundNumber,
+                (now - roundStartedAt) / 1000d,
+                action,
+                roundOutcomePlan,
+                formatAmount(roundOutcomeValues[0]),
+                formatAmount(roundOutcomeValues[1]),
+                formatAmount(roundOutcomeValues[2]),
+                spreadText,
+                formatAmount(lastValues[0]),
+                formatAmount(lastValues[1]),
+                formatAmount(lastValues[2]),
+                lastCountdownObserved == null ? "?" : String.valueOf(lastCountdownObserved),
+                TapAccessibilityService.isReady() ? "ON" : "OFF",
+                reason));
+        roundStartedAt = 0L;
     }
 
     private double estimatedRemaining(long now) {
@@ -794,6 +934,7 @@ public class ProjectionService extends Service {
 
     @Override
     public void onDestroy() {
+        finishRound(System.currentTimeMillis(), "SERVICE_STOP");
         EventLog.log(this, "SERVICE_STOP | ProjectionService kapandı");
         TapAccessibilityService.clearMarkers();
         if (imageReader != null) imageReader.close();

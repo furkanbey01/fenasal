@@ -16,8 +16,8 @@ import java.util.Locale;
 
 public final class EventLog {
     private static final String FILE_NAME = "fenasal.log";
-    private static final long MAX_FILE_BYTES = 700_000L;
-    private static final int KEEP_LINES_ON_ROTATE = 1200;
+    private static final long MAX_FILE_BYTES = 8_000_000L;
+    private static final int KEEP_LINES_ON_ROTATE = 40_000;
 
     private EventLog() { }
 
@@ -50,6 +50,23 @@ public final class EventLog {
                 String line = lines.get(i);
                 if (sb.length() + line.length() + 1 > maxChars && sb.length() > 0) break;
                 sb.insert(0, line + "\n");
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            return "Kayıt okunamadı: " + e.getMessage();
+        }
+    }
+
+    public static synchronized String readAll(Context context) {
+        if (context == null) return "";
+        File file = new File(context.getFilesDir(), FILE_NAME);
+        if (!file.exists()) return "Henüz kayıt yok.";
+
+        try {
+            List<String> lines = readAllLines(file);
+            StringBuilder sb = new StringBuilder();
+            for (String line : lines) {
+                sb.append(line).append('\n');
             }
             return sb.toString();
         } catch (Exception e) {
