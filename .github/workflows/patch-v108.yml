@@ -1,4 +1,4 @@
-name: Strategy v3 stability and round recovery
+name: Strategy v3.1 countdown hardening
 
 on:
   push:
@@ -15,8 +15,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Apply strategy v3 patch
-        run: python tools/patch_strategy_v3.py
+      - name: Apply strategy v3.1 patch
+        run: python tools/patch_strategy_v31.py
 
       - name: Commit strategy changes
         run: |
@@ -24,5 +24,5 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add app/src/main/java/com/fenasal/app/ProjectionService.java
           git diff --cached --check
-          git commit -m "Add strategy v3 round recovery"
+          git commit -m "Harden strategy v3 countdown recovery"
           git push
