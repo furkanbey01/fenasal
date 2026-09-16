@@ -1,0 +1,34 @@
+name: Apply v1.0.23 result timing patch
+
+on:
+  push:
+    branches: [ "fena-v1.0.23-game-phase" ]
+    paths:
+      - '.github/workflows/patch-v1023b.yml'
+      - 'tools/patch_v1023b.py'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: fena-v1.0.23-game-phase
+      - name: Apply patch
+        run: python tools/patch_v1023b.py
+      - name: Verify
+        run: |
+          grep -q 'gamePhase != PHASE_BREAK' app/src/main/java/com/fenasal/app/ProjectionService.java
+          if grep -A4 'resultResolvedThisRound' app/src/main/java/com/fenasal/app/ProjectionService.java | grep -q 'remaining < 0d'; then exit 1; fi
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/fenasal/app/ProjectionService.java
+          git diff --cached --check
+          git commit -m "Decouple result detection from countdown age"
+          git push origin HEAD:fena-v1.0.23-game-phase
