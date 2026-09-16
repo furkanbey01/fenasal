@@ -1540,8 +1540,6 @@ public class ProjectionService extends Service {
 
         if (resultResolvedThisRound
                 || (gamePhase != PHASE_BREAK && gamePhase != PHASE_RESULT)
-                || remaining < 0d
-                || remaining > 0.05d
                 || finalRankMax < 0
                 || finalRankMin < 0
                 || finalRankMiddle < 0) {
