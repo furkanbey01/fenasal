@@ -72,12 +72,23 @@ public class ProjectionService extends Service {
     private static final long RESULT_CONFIRM_WINDOW_MS = 1400L;
     private static final int RESULT_CONFIRM_FRAMES = 2;
 
+    // Screenshot-calibrated balance panel: bottom-left purple card (e.g. 26K).
+    private static final float BALANCE_X0 = 0.025f;
+    private static final float BALANCE_X1 = 0.285f;
+    private static final float BALANCE_Y0 = 0.925f;
+    private static final float BALANCE_Y1 = 0.998f;
+    private static final float BALANCE_OCR_SCALE = 3.2f;
+    private static final long BALANCE_SCAN_INTERVAL_MS = 650L;
+    private static final long BALANCE_FRESH_MS = 2200L;
+    private static final long BALANCE_VERIFY_TIMEOUT_MS = 2600L;
+
     private MediaProjection projection;
     private VirtualDisplay virtualDisplay;
     private ImageReader imageReader;
     private HandlerThread captureThread;
     private Handler captureHandler;
     private TextRecognizer recognizer;
+    private TextRecognizer balanceRecognizer;
 
     private volatile boolean processing;
     private long lastAnalysis;
@@ -133,6 +144,23 @@ public class ProjectionService extends Service {
     private long resultCandidateAt;
     private boolean resultResolvedThisRound;
 
+    private volatile boolean balanceProcessing;
+    private long lastBalanceScanAt;
+    private double lastBalance = -1d;
+    private String lastBalanceRaw = "";
+    private long lastBalanceAt;
+    private long lastBalanceLogAt;
+    private long lastBalanceMissLogAt;
+    private boolean balanceVerifyArmed;
+    private boolean balanceVerifyPending;
+    private double balanceBeforeBet = -1d;
+    private String balanceBeforeRaw = "";
+    private long balanceVerifyStartedAt;
+    private long balanceVerifyDeadline;
+    private String balanceVerifyPlan = "YOK";
+    private int balanceExpectedGestures;
+    private String lastBalanceCheck = "YOK";
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -147,6 +175,7 @@ public class ProjectionService extends Service {
                 .build();
         startForeground(7, notification);
         recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS);
+        balanceRecognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS);
         EventLog.log(this, "SERVICE_START | ProjectionService başladı");
         EventLog.log(this, "MODE_INIT | " + StrategyModeStore.label(strategyMode));
         TapAccessibilityService.updateOverlay("FENA • BAŞLIYOR\nEkran yakalama hazırlanıyor...");
@@ -273,6 +302,8 @@ public class ProjectionService extends Service {
             visualScores[i] = targetVisualScore(full, targetX[i], labelY);
         }
         observeVisualResult(now, estimatedRemaining(now), visualScores);
+        maybeAnalyzeBalance(full, now);
+        evaluateBalanceVerification(now);
 
         boolean discoveryScan = !anchorsLocked
                 || lastAnchorSeenAt == 0L
@@ -703,12 +734,18 @@ public class ProjectionService extends Service {
                 betPlaced = true;
                 oneSecondConfirmed = false;
                 lastTapTime = now;
+                armBalanceVerification(now, actionPlan);
 
                 if (actionMode == StrategyModeStore.MIDDLE) {
                     TapAccessibilityService.tapSingle(
                             targetX[actionMiddle], tapY, TARGET_NAMES[actionMiddle],
                             ok -> {
                                 String outcome = ok ? "BET_OK" : "BET_FAILED";
+                                if (ok) {
+                                    activateBalanceVerification(System.currentTimeMillis(), 1);
+                                } else {
+                                    cancelBalanceVerification("GESTURE_FAILED");
+                                }
                                 recordRoundOutcome(
                                         outcome, actionPlan, actionMax, actionMin, actionSpread);
                                 if (!ok) {
@@ -728,6 +765,13 @@ public class ProjectionService extends Service {
                                     outcome = "BET_PARTIAL";
                                 } else {
                                     outcome = "BET_FAILED";
+                                }
+                                int acceptedGestures = (firstOk ? 1 : 0) + (secondOk ? 1 : 0);
+                                if (acceptedGestures > 0) {
+                                    activateBalanceVerification(
+                                            System.currentTimeMillis(), acceptedGestures);
+                                } else {
+                                    cancelBalanceVerification("GESTURE_FAILED");
                                 }
                                 recordRoundOutcome(
                                         outcome, actionPlan, actionMax, actionMin, actionSpread);
@@ -1114,6 +1158,12 @@ public class ProjectionService extends Service {
         }
         sb.append("\nMOD: ").append(StrategyModeStore.label(strategyMode));
         sb.append("\nPLAN: ").append(plan);
+        sb.append("\nBAKİYE: ")
+                .append(lastBalance >= 0d && System.currentTimeMillis() - lastBalanceAt <= 5000L
+                        ? formatAmount(lastBalance) : "?");
+        if (!"YOK".equals(lastBalanceCheck)) {
+            sb.append(" • BET: ").append(lastBalanceCheck);
+        }
         sb.append("\nA11Y: ").append(TapAccessibilityService.isReady() ? "AÇIK" : "KAPALI");
         sb.append(" • HEDEF: ").append(anchorsLocked ? "OTOMATİK" : "YEDEK");
 
@@ -1122,6 +1172,193 @@ public class ProjectionService extends Service {
             sb.append("\n⚠ OKUMA EKSİK • OCR: ").append(cleanOcr(rawOcr));
         }
         return sb.toString();
+    }
+
+    private void maybeAnalyzeBalance(Bitmap full, long now) {
+        if (balanceRecognizer == null || balanceProcessing) return;
+        if (now - lastBalanceScanAt < BALANCE_SCAN_INTERVAL_MS) return;
+        lastBalanceScanAt = now;
+
+        int w = full.getWidth();
+        int h = full.getHeight();
+        int left = clamp(Math.round(w * BALANCE_X0), 0, w - 2);
+        int top = clamp(Math.round(h * BALANCE_Y0), 0, h - 2);
+        int right = clamp(Math.round(w * BALANCE_X1), left + 1, w);
+        int bottom = clamp(Math.round(h * BALANCE_Y1), top + 1, h);
+
+        Bitmap crop;
+        Bitmap scan;
+        try {
+            crop = Bitmap.createBitmap(full, left, top, right - left, bottom - top);
+            scan = Bitmap.createScaledBitmap(
+                    crop,
+                    Math.max(1, Math.round(crop.getWidth() * BALANCE_OCR_SCALE)),
+                    Math.max(1, Math.round(crop.getHeight() * BALANCE_OCR_SCALE)),
+                    true);
+            crop.recycle();
+        } catch (Exception e) {
+            EventLog.log(this, "BALANCE_ERROR | CROP | " + shortError(e));
+            return;
+        }
+
+        balanceProcessing = true;
+        balanceRecognizer.process(InputImage.fromBitmap(scan, 0))
+                .addOnSuccessListener(this::handleBalanceText)
+                .addOnFailureListener(e -> {
+                    long t = System.currentTimeMillis();
+                    if (t - lastBalanceMissLogAt > 2500L) {
+                        lastBalanceMissLogAt = t;
+                        EventLog.log(this, "BALANCE_ERROR | OCR | " + shortError(e));
+                    }
+                })
+                .addOnCompleteListener(task -> {
+                    scan.recycle();
+                    balanceProcessing = false;
+                    evaluateBalanceVerification(System.currentTimeMillis());
+                });
+    }
+
+    private void handleBalanceText(Text text) {
+        long now = System.currentTimeMillis();
+        String raw = text == null ? "" : cleanOcr(text.getText());
+        double amount = parseAmount(raw);
+
+        if (amount < 0d) {
+            if (now - lastBalanceMissLogAt > 2500L) {
+                lastBalanceMissLogAt = now;
+                EventLog.log(this, "BALANCE_MISS | OCR=" + raw);
+            }
+            return;
+        }
+
+        double old = lastBalance;
+        lastBalance = amount;
+        lastBalanceRaw = raw;
+        lastBalanceAt = now;
+
+        if (old < 0d || Math.abs(old - amount) > 0.1d) {
+            EventLog.log(this, "BALANCE_CHANGE | old=" + formatAmount(old)
+                    + " | new=" + formatAmount(amount)
+                    + " | delta=" + formatSignedAmount(amount - old)
+                    + " | OCR=" + raw);
+            lastBalanceLogAt = now;
+        } else if (now - lastBalanceLogAt > 5000L) {
+            EventLog.log(this, "BALANCE | value=" + formatAmount(amount) + " | OCR=" + raw);
+            lastBalanceLogAt = now;
+        }
+
+        evaluateBalanceVerification(now);
+    }
+
+    private void armBalanceVerification(long now, String plan) {
+        balanceVerifyArmed = true;
+        balanceVerifyPending = false;
+        balanceVerifyPlan = plan;
+        balanceExpectedGestures = 0;
+        balanceBeforeBet = -1d;
+        balanceBeforeRaw = "";
+        lastBalanceCheck = "HAZIR";
+
+        if (lastBalance >= 0d && now - lastBalanceAt <= BALANCE_FRESH_MS) {
+            balanceBeforeBet = lastBalance;
+            balanceBeforeRaw = lastBalanceRaw;
+            EventLog.log(this, "BET_BALANCE_BEFORE | plan=" + plan
+                    + " | balance=" + formatAmount(balanceBeforeBet)
+                    + " | OCR=" + balanceBeforeRaw);
+        } else {
+            EventLog.log(this, "BET_BALANCE_BEFORE | plan=" + plan
+                    + " | balance=UNAVAILABLE | ageMs="
+                    + (lastBalanceAt == 0L ? -1L : now - lastBalanceAt));
+        }
+    }
+
+    private void activateBalanceVerification(long now, int acceptedGestures) {
+        if (!balanceVerifyArmed) return;
+        balanceVerifyArmed = false;
+        balanceExpectedGestures = acceptedGestures;
+
+        if (balanceBeforeBet < 0d) {
+            lastBalanceCheck = "OKUNAMADI";
+            EventLog.log(this, "BET_BALANCE_VERIFY_UNAVAILABLE | plan=" + balanceVerifyPlan
+                    + " | gestures=" + acceptedGestures);
+            return;
+        }
+
+        balanceVerifyPending = true;
+        balanceVerifyStartedAt = now;
+        balanceVerifyDeadline = now + BALANCE_VERIFY_TIMEOUT_MS;
+        lastBalanceCheck = "BEKLE";
+        EventLog.log(this, "BET_BALANCE_VERIFY_START | plan=" + balanceVerifyPlan
+                + " | before=" + formatAmount(balanceBeforeBet)
+                + " | gestures=" + acceptedGestures
+                + " | timeoutMs=" + BALANCE_VERIFY_TIMEOUT_MS);
+    }
+
+    private void cancelBalanceVerification(String reason) {
+        if (!balanceVerifyArmed && !balanceVerifyPending) return;
+        EventLog.log(this, "BET_BALANCE_VERIFY_CANCEL | reason=" + reason
+                + " | plan=" + balanceVerifyPlan);
+        balanceVerifyArmed = false;
+        balanceVerifyPending = false;
+        lastBalanceCheck = "IPTAL";
+    }
+
+    private void evaluateBalanceVerification(long now) {
+        if (!balanceVerifyPending) return;
+
+        boolean hasPostRead = lastBalance >= 0d
+                && lastBalanceAt >= balanceVerifyStartedAt + 120L;
+
+        if (hasPostRead && lastBalance < balanceBeforeBet - 0.5d) {
+            double drop = balanceBeforeBet - lastBalance;
+            EventLog.log(this, "BET_CONFIRMED_BALANCE | plan=" + balanceVerifyPlan
+                    + " | before=" + formatAmount(balanceBeforeBet)
+                    + " | after=" + formatAmount(lastBalance)
+                    + " | drop=" + formatAmount(drop)
+                    + " | gestures=" + balanceExpectedGestures);
+            balanceVerifyPending = false;
+            lastBalanceCheck = "ONAY";
+            return;
+        }
+
+        if (now < balanceVerifyDeadline) return;
+
+        if (!hasPostRead) {
+            EventLog.log(this, "BET_BALANCE_INCONCLUSIVE | reason=POST_BALANCE_UNREADABLE"
+                    + " | plan=" + balanceVerifyPlan
+                    + " | before=" + formatAmount(balanceBeforeBet));
+            lastBalanceCheck = "OKUNAMADI";
+        } else if (Math.abs(lastBalance - balanceBeforeBet) <= 0.5d) {
+            boolean coarse = isCoarseBalanceText(balanceBeforeRaw)
+                    || isCoarseBalanceText(lastBalanceRaw);
+            EventLog.log(this, "BET_BALANCE_" + (coarse ? "INCONCLUSIVE" : "NOT_CONFIRMED")
+                    + " | reason=" + (coarse ? "ROUNDED_DISPLAY_UNCHANGED" : "UNCHANGED")
+                    + " | plan=" + balanceVerifyPlan
+                    + " | before=" + formatAmount(balanceBeforeBet)
+                    + " | after=" + formatAmount(lastBalance)
+                    + " | OCR=" + lastBalanceRaw);
+            lastBalanceCheck = coarse ? "YUVARLAK" : "DEĞİŞMEDİ";
+        } else {
+            EventLog.log(this, "BET_BALANCE_INCONCLUSIVE | reason=BALANCE_INCREASED"
+                    + " | plan=" + balanceVerifyPlan
+                    + " | before=" + formatAmount(balanceBeforeBet)
+                    + " | after=" + formatAmount(lastBalance)
+                    + " | delta=" + formatSignedAmount(lastBalance - balanceBeforeBet));
+            lastBalanceCheck = "ARTTI";
+        }
+        balanceVerifyPending = false;
+    }
+
+    private boolean isCoarseBalanceText(String raw) {
+        if (raw == null) return false;
+        String s = raw.toUpperCase(Locale.ROOT).replace(" ", "");
+        return s.contains("K") || s.contains("M");
+    }
+
+    private String formatSignedAmount(double value) {
+        if (Double.isNaN(value)) return "?";
+        String prefix = value > 0d ? "+" : value < 0d ? "-" : "";
+        return prefix + formatAmount(Math.abs(value));
     }
 
     private void observeVisualResult(long now, double remaining, float[] scores) {
@@ -1420,6 +1657,7 @@ public class ProjectionService extends Service {
         if (virtualDisplay != null) virtualDisplay.release();
         if (projection != null) projection.stop();
         if (recognizer != null) recognizer.close();
+        if (balanceRecognizer != null) balanceRecognizer.close();
         if (captureThread != null) captureThread.quitSafely();
         super.onDestroy();
     }

@@ -39,11 +39,13 @@ jobs:
 
       - name: Verify version metadata
         run: |
-          grep -q "versionCode 21" app/build.gradle
-          grep -q "versionName '1.0.21'" app/build.gradle
+          grep -q "versionCode 22" app/build.gradle
+          grep -q "versionName '1.0.22'" app/build.gradle
           grep -q '<string name="app_name">Fena</string>' app/src/main/res/values/strings.xml
           grep -q 'StrategyModeStore.MIDDLE' app/src/main/java/com/fenasal/app/ProjectionService.java
           grep -q 'MODE_SWITCH' app/src/main/java/com/fenasal/app/ProjectionService.java
+          grep -q 'BALANCE_X0' app/src/main/java/com/fenasal/app/ProjectionService.java
+          grep -q 'BET_CONFIRMED_BALANCE' app/src/main/java/com/fenasal/app/ProjectionService.java
 
       - name: Build signed release APK
         run: gradle :app:assembleRelease --stacktrace
@@ -60,7 +62,7 @@ jobs:
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Fena-v1.0.21
+          name: Fena-v1.0.22
           path: Fena.apk
           if-no-files-found: error
 
@@ -81,4 +83,4 @@ jobs:
           gh release create "$TAG" Fena.apk \
             --target "$GITHUB_SHA" \
             --title "Fena $TAG" \
-            --notes "Fena $TAG: iki strateji modu eklendi. Başlangıçta YÜKSEK + DÜŞÜK oynar; güvenilir sonuç algısında orta sıralı alan kazanırsa ORTA moduna, uçlardan biri kazanırsa tekrar YÜKSEK + DÜŞÜK moduna geçer. Aktif mod ekranda görünür ve elle de değiştirilebilir."
+            --notes "Fena $TAG: bakiye OCR takibi eklendi. Sol alttaki bakiye paneli ayrı ve hızlı OCR ile okunur, panelde ve logda gösterilir. Bahis öncesi bakiye kaydedilir; dokunma sonrası görünür bakiye düşerse BET_CONFIRMED_BALANCE ile doğrulanır. K/M şeklinde yuvarlanmış bakiye değişmezse yanlış hata vermek yerine sonuç belirsiz olarak loglanır. İki strateji modu ve v1.0.20 tetikleme düzeltmeleri korunur."
