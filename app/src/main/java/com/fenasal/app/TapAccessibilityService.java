@@ -20,7 +20,7 @@ public class TapAccessibilityService extends AccessibilityService {
         void onFinished(boolean firstOk, boolean secondOk);
     }
 
-    private interface SingleTapCallback {
+    public interface TapCallback {
         void onFinished(boolean success);
     }
 
@@ -84,6 +84,8 @@ public class TapAccessibilityService extends AccessibilityService {
             float boxBottom,
             int maxIndex,
             int minIndex,
+            int middleIndex,
+            int strategyMode,
             boolean minEmpty,
             String[] values,
             double remaining,
@@ -98,11 +100,28 @@ public class TapAccessibilityService extends AccessibilityService {
                 boxBottom,
                 maxIndex,
                 minIndex,
+                middleIndex,
+                strategyMode,
                 minEmpty,
                 values,
                 remaining,
                 active,
                 tapping));
+    }
+
+    public static void tapSingle(
+            float x,
+            float yRatio,
+            String label,
+            TapCallback callback) {
+
+        TapAccessibilityService service = instance;
+        if (service == null) {
+            if (callback != null) callback.onFinished(false);
+            return;
+        }
+        EventLog.log(service, "GESTURE_SINGLE | " + label + " | x=" + x + " y=" + yRatio);
+        service.tap(x, yRatio, label, callback);
     }
 
     public static void clearMarkers() {
@@ -273,7 +292,7 @@ public class TapAccessibilityService extends AccessibilityService {
             float xRatio,
             float yRatio,
             String label,
-            SingleTapCallback callback) {
+            TapCallback callback) {
 
         WindowManager wm = (WindowManager) getSystemService(WINDOW_SERVICE);
         DisplayMetrics dm = new DisplayMetrics();

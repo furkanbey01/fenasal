@@ -24,6 +24,7 @@ import androidx.core.content.ContextCompat;
 
 public class MainActivity extends AppCompatActivity {
     private TextView statusText;
+    private TextView modeText;
     private TextView logText;
     private MediaProjectionManager projectionManager;
 
@@ -67,8 +68,10 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.activity_main);
 
         statusText = findViewById(R.id.statusText);
+        modeText = findViewById(R.id.modeText);
         logText = findViewById(R.id.logText);
 
+        Button modeButton = findViewById(R.id.modeButton);
         Button accessibilityButton = findViewById(R.id.accessibilityButton);
         Button startButton = findViewById(R.id.startButton);
         Button stopButton = findViewById(R.id.stopButton);
@@ -78,6 +81,15 @@ public class MainActivity extends AppCompatActivity {
 
         projectionManager =
                 (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
+
+        modeButton.setOnClickListener(v -> {
+            int mode = StrategyModeStore.toggle(this);
+            EventLog.log(this, "MODE_MANUAL | " + StrategyModeStore.label(mode));
+            refreshModeText();
+            Toast.makeText(this,
+                    "Mod: " + StrategyModeStore.label(mode),
+                    Toast.LENGTH_SHORT).show();
+        });
 
         accessibilityButton.setOnClickListener(v -> {
             EventLog.log(this, "UI | Erişilebilirlik ayarları açıldı");
@@ -131,6 +143,14 @@ public class MainActivity extends AppCompatActivity {
         });
 
         EventLog.log(this, "UI_OPEN | Ana ekran açıldı");
+        refreshModeText();
+    }
+
+    private void refreshModeText() {
+        if (modeText == null) return;
+        int mode = StrategyModeStore.get(this);
+        modeText.setText("Aktif mod: " + StrategyModeStore.label(mode)
+                + "\nOtomatik geçiş: sonuç güvenli algılanırsa açık");
     }
 
     @Override
@@ -138,6 +158,7 @@ public class MainActivity extends AppCompatActivity {
         super.onResume();
         uiHandler.removeCallbacks(refreshLogs);
         uiHandler.post(refreshLogs);
+        refreshModeText();
 
         if (TapAccessibilityService.isReady()) {
             statusText.setText(

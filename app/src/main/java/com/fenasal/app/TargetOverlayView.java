@@ -19,6 +19,8 @@ public class TargetOverlayView extends View {
     private float boxBottom = 0.726f;
     private int maxIndex = -1;
     private int minIndex = -1;
+    private int middleIndex = -1;
+    private int strategyMode = StrategyModeStore.EXTREMES;
     private boolean minEmpty;
     private String[] values = {"?", "?", "?"};
     private double remaining = -1d;
@@ -46,6 +48,8 @@ public class TargetOverlayView extends View {
             float boxBottom,
             int maxIndex,
             int minIndex,
+            int middleIndex,
+            int strategyMode,
             boolean minEmpty,
             String[] values,
             double remaining,
@@ -59,6 +63,8 @@ public class TargetOverlayView extends View {
         this.boxBottom = boxBottom;
         this.maxIndex = maxIndex;
         this.minIndex = minIndex;
+        this.middleIndex = middleIndex;
+        this.strategyMode = strategyMode;
         this.minEmpty = minEmpty;
         this.values = values != null && values.length == 3
                 ? values.clone()
@@ -74,6 +80,7 @@ public class TargetOverlayView extends View {
         tapping = false;
         maxIndex = -1;
         minIndex = -1;
+        middleIndex = -1;
         invalidate();
     }
 
@@ -96,34 +103,52 @@ public class TargetOverlayView extends View {
 
         int highColor = tapping ? 0xD9FFD54F : 0xB833D17A;
         int lowColor = tapping ? 0xD9FFD54F : 0xB840C4FF;
+        int middleColor = tapping ? 0xD9FFD54F : 0xD9E040FB;
 
-        drawTarget(
-                canvas,
-                maxIndex,
-                halfWidth,
-                top,
-                bottom,
-                radius,
-                highColor,
-                "YÜKSEK  " + values[maxIndex]);
+        if (strategyMode == StrategyModeStore.MIDDLE) {
+            if (middleIndex < 0) {
+                drawTopMessage(canvas, "ORTA HESAPLANAMADI", 0xFFE53935);
+                return;
+            }
+            drawTarget(
+                    canvas,
+                    middleIndex,
+                    halfWidth,
+                    top,
+                    bottom,
+                    radius,
+                    middleColor,
+                    "ORTA  " + values[middleIndex]);
+        } else {
+            drawTarget(
+                    canvas,
+                    maxIndex,
+                    halfWidth,
+                    top,
+                    bottom,
+                    radius,
+                    highColor,
+                    "YÜKSEK  " + values[maxIndex]);
 
-        String lowLabel = minEmpty
-                ? "BOŞ  " + values[minIndex]
-                : "DÜŞÜK  " + values[minIndex];
+            String lowLabel = minEmpty
+                    ? "BOŞ  " + values[minIndex]
+                    : "DÜŞÜK  " + values[minIndex];
 
-        drawTarget(
-                canvas,
-                minIndex,
-                halfWidth,
-                top,
-                bottom,
-                radius,
-                lowColor,
-                lowLabel);
+            drawTarget(
+                    canvas,
+                    minIndex,
+                    halfWidth,
+                    top,
+                    bottom,
+                    radius,
+                    lowColor,
+                    lowLabel);
+        }
 
+        String modeLabel = strategyMode == StrategyModeStore.MIDDLE ? "ORTA" : "YÜKSEK+DÜŞÜK";
         String topMessage = tapping
-                ? "ŞİMDİ TIKLANIYOR"
-                : String.format(Locale.ROOT, "PLAN HAZIR • %.1f sn", Math.max(0d, remaining));
+                ? "ŞİMDİ TIKLANIYOR • " + modeLabel
+                : String.format(Locale.ROOT, modeLabel + " • %.1f sn", Math.max(0d, remaining));
         drawTopMessage(
                 canvas,
                 topMessage,
