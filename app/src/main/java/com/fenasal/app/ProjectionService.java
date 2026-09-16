@@ -67,6 +67,11 @@ public class ProjectionService extends Service {
     private static final double MIN_BET_SPREAD_RATIO = 0.60d;
     private static final double MIN_ADJACENT_GAP_RATIO = 0.10d;
 
+    private static final float RESULT_MIN_DELTA = 0.060f;
+    private static final float RESULT_MIN_MARGIN = 0.025f;
+    private static final long RESULT_CONFIRM_WINDOW_MS = 1400L;
+    private static final int RESULT_CONFIRM_FRAMES = 2;
+
     private MediaProjection projection;
     private VirtualDisplay virtualDisplay;
     private ImageReader imageReader;
@@ -118,10 +123,21 @@ public class ProjectionService extends Service {
     private String latePlanC2 = "";
     private String latePlanC3 = "";
 
+    private int strategyMode = StrategyModeStore.EXTREMES;
+    private int finalRankMax = -1;
+    private int finalRankMin = -1;
+    private int finalRankMiddle = -1;
+    private final float[] resultVisualBaseline = {-1f, -1f, -1f};
+    private int resultCandidate = -1;
+    private int resultCandidateHits;
+    private long resultCandidateAt;
+    private boolean resultResolvedThisRound;
+
     @Override
     public void onCreate() {
         super.onCreate();
         serviceStartedAt = System.currentTimeMillis();
+        strategyMode = StrategyModeStore.get(this);
         createNotificationChannel();
         Notification notification = new NotificationCompat.Builder(this, CHANNEL)
                 .setContentTitle("Fena çalışıyor")
@@ -132,6 +148,7 @@ public class ProjectionService extends Service {
         startForeground(7, notification);
         recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS);
         EventLog.log(this, "SERVICE_START | ProjectionService başladı");
+        EventLog.log(this, "MODE_INIT | " + StrategyModeStore.label(strategyMode));
         TapAccessibilityService.updateOverlay("FENA • BAŞLIYOR\nEkran yakalama hazırlanıyor...");
     }
 
@@ -250,6 +267,12 @@ public class ProjectionService extends Service {
         for (int i = 0; i < 3; i++) {
             inkRatios[i] = whiteInkRatio(full, targetX[i], amountY);
         }
+
+        final float[] visualScores = new float[3];
+        for (int i = 0; i < 3; i++) {
+            visualScores[i] = targetVisualScore(full, targetX[i], labelY);
+        }
+        observeVisualResult(now, estimatedRemaining(now), visualScores);
 
         boolean discoveryScan = !anchorsLocked
                 || lastAnchorSeenAt == 0L
@@ -473,13 +496,25 @@ public class ProjectionService extends Service {
             }
         }
 
-        String plan = (max >= 0 && min >= 0)
+        int middle = (max >= 0 && min >= 0 && max != min) ? 3 - max - min : -1;
+        strategyMode = StrategyModeStore.get(this);
+
+        String rankPlan = (max >= 0 && min >= 0)
                 ? TARGET_NAMES[max] + " + " + TARGET_NAMES[min]
                 : "YOK";
+        String plan = strategyMode == StrategyModeStore.MIDDLE && middle >= 0
+                ? TARGET_NAMES[middle]
+                : rankPlan;
+
+        if (max >= 0 && min >= 0 && middle >= 0) {
+            finalRankMax = max;
+            finalRankMin = min;
+            finalRankMiddle = middle;
+        }
 
         if (lastCountdownObserved != null && max >= 0 && min >= 0) {
-            if (lastCountdownObserved == 3) latePlanC3 = plan;
-            if (lastCountdownObserved == 2) latePlanC2 = plan;
+            if (lastCountdownObserved == 3) latePlanC3 = rankPlan;
+            if (lastCountdownObserved == 2) latePlanC2 = rankPlan;
         }
 
         logRoundSnapshot(
@@ -507,6 +542,8 @@ public class ProjectionService extends Service {
                 boxBottom,
                 max,
                 min,
+                middle,
+                strategyMode,
                 min >= 0 && lastEmpty[min],
                 displayValues,
                 remaining,
@@ -519,7 +556,6 @@ public class ProjectionService extends Service {
                 : -1d;
         boolean spreadEnough = spreadRatio >= MIN_BET_SPREAD_RATIO;
 
-        int middle = (max >= 0 && min >= 0 && max != min) ? 3 - max - min : -1;
         double highMidGapRatio = (middle >= 0 && lastValues[max] > 0d)
                 ? (lastValues[max] - lastValues[middle]) / lastValues[max]
                 : -1d;
@@ -531,10 +567,10 @@ public class ProjectionService extends Service {
 
         boolean latePlanStable;
         if (!latePlanC2.isEmpty()) {
-            latePlanStable = plan.equals(latePlanC2)
-                    && (latePlanC3.isEmpty() || plan.equals(latePlanC3));
+            latePlanStable = rankPlan.equals(latePlanC2)
+                    && (latePlanC3.isEmpty() || rankPlan.equals(latePlanC3));
         } else {
-            latePlanStable = !latePlanC3.isEmpty() && plan.equals(latePlanC3);
+            latePlanStable = !latePlanC3.isEmpty() && rankPlan.equals(latePlanC3);
         }
         boolean strategyPass = spreadEnough && adjacentGapsEnough && latePlanStable;
 
@@ -544,8 +580,9 @@ public class ProjectionService extends Service {
                 && now - lastGateLogAt > 450L) {
             lastGateLogAt = now;
             EventLog.log(this, String.format(Locale.ROOT,
-                    "BET_GATE | T=%.2f | one=%s | fresh=%d/3 | plan=%s | spread=%s | gaps=%s | stable=%s | a11y=%s",
+                    "BET_GATE | T=%.2f | mode=%s | one=%s | fresh=%d/3 | plan=%s | spread=%s | gaps=%s | stable=%s | a11y=%s",
                     remaining,
+                    StrategyModeStore.label(strategyMode),
                     oneSecondConfirmed ? "YES" : "NO",
                     freshCount,
                     plan,
@@ -648,6 +685,8 @@ public class ProjectionService extends Service {
                         boxBottom,
                         max,
                         min,
+                        middle,
+                        strategyMode,
                         min >= 0 && lastEmpty[min],
                         displayValues,
                         remaining,
@@ -656,6 +695,8 @@ public class ProjectionService extends Service {
 
                 final int actionMax = max;
                 final int actionMin = min;
+                final int actionMiddle = middle;
+                final int actionMode = strategyMode;
                 final String actionPlan = plan;
                 final double actionSpread = spreadRatio;
 
@@ -663,31 +704,41 @@ public class ProjectionService extends Service {
                 oneSecondConfirmed = false;
                 lastTapTime = now;
 
-                TapAccessibilityService.tapPair(
-                        targetX[actionMax], targetX[actionMin], tapY,
-                        TARGET_NAMES[actionMax], TARGET_NAMES[actionMin],
-                        (firstOk, secondOk) -> {
-                            String outcome;
-                            if (firstOk && secondOk) {
-                                outcome = "BET_OK";
-                            } else if (firstOk || secondOk) {
-                                outcome = "BET_PARTIAL";
-                            } else {
-                                outcome = "BET_FAILED";
-                            }
-                            recordRoundOutcome(
-                                    outcome,
-                                    actionPlan,
-                                    actionMax,
-                                    actionMin,
-                                    actionSpread);
-                            if (!firstOk || !secondOk) {
-                                EventLog.log(ProjectionService.this,
-                                        "TAP_RESULT_ERROR | first=" + firstOk
-                                                + " second=" + secondOk
-                                                + " | plan=" + actionPlan);
-                            }
-                        });
+                if (actionMode == StrategyModeStore.MIDDLE) {
+                    TapAccessibilityService.tapSingle(
+                            targetX[actionMiddle], tapY, TARGET_NAMES[actionMiddle],
+                            ok -> {
+                                String outcome = ok ? "BET_OK" : "BET_FAILED";
+                                recordRoundOutcome(
+                                        outcome, actionPlan, actionMax, actionMin, actionSpread);
+                                if (!ok) {
+                                    EventLog.log(ProjectionService.this,
+                                            "TAP_RESULT_ERROR | middle=FAIL | plan=" + actionPlan);
+                                }
+                            });
+                } else {
+                    TapAccessibilityService.tapPair(
+                            targetX[actionMax], targetX[actionMin], tapY,
+                            TARGET_NAMES[actionMax], TARGET_NAMES[actionMin],
+                            (firstOk, secondOk) -> {
+                                String outcome;
+                                if (firstOk && secondOk) {
+                                    outcome = "BET_OK";
+                                } else if (firstOk || secondOk) {
+                                    outcome = "BET_PARTIAL";
+                                } else {
+                                    outcome = "BET_FAILED";
+                                }
+                                recordRoundOutcome(
+                                        outcome, actionPlan, actionMax, actionMin, actionSpread);
+                                if (!firstOk || !secondOk) {
+                                    EventLog.log(ProjectionService.this,
+                                            "TAP_RESULT_ERROR | first=" + firstOk
+                                                    + " second=" + secondOk
+                                                    + " | plan=" + actionPlan);
+                                }
+                            });
+                }
             }
         }
     }
@@ -838,6 +889,13 @@ public class ProjectionService extends Service {
         lastRoundSnapshotSecond = -99;
         latePlanC2 = "";
         latePlanC3 = "";
+        finalRankMax = -1;
+        finalRankMin = -1;
+        finalRankMiddle = -1;
+        resultCandidate = -1;
+        resultCandidateHits = 0;
+        resultCandidateAt = 0L;
+        resultResolvedThisRound = false;
         lastPlan = "";
         lastLoggedValues[0] = -999d;
         lastLoggedValues[1] = -999d;
@@ -1050,6 +1108,11 @@ public class ProjectionService extends Service {
             }
         }
 
+        int middle = (max >= 0 && min >= 0 && max != min) ? 3 - max - min : -1;
+        if (middle >= 0 && strategyMode == StrategyModeStore.MIDDLE) {
+            sb.append("\n").append(TARGET_NAMES[middle]).append("  ◆ ORTA");
+        }
+        sb.append("\nMOD: ").append(StrategyModeStore.label(strategyMode));
         sb.append("\nPLAN: ").append(plan);
         sb.append("\nA11Y: ").append(TapAccessibilityService.isReady() ? "AÇIK" : "KAPALI");
         sb.append(" • HEDEF: ").append(anchorsLocked ? "OTOMATİK" : "YEDEK");
@@ -1059,6 +1122,124 @@ public class ProjectionService extends Service {
             sb.append("\n⚠ OKUMA EKSİK • OCR: ").append(cleanOcr(rawOcr));
         }
         return sb.toString();
+    }
+
+    private void observeVisualResult(long now, double remaining, float[] scores) {
+        if (!anchorsLocked || scores == null || scores.length != 3) return;
+
+        if (remaining > 2.5d) {
+            for (int i = 0; i < 3; i++) {
+                if (resultVisualBaseline[i] < 0f) {
+                    resultVisualBaseline[i] = scores[i];
+                } else {
+                    resultVisualBaseline[i] = resultVisualBaseline[i] * 0.88f + scores[i] * 0.12f;
+                }
+            }
+            resultCandidate = -1;
+            resultCandidateHits = 0;
+            return;
+        }
+
+        if (resultResolvedThisRound
+                || remaining < 0d
+                || remaining > 0.05d
+                || finalRankMax < 0
+                || finalRankMin < 0
+                || finalRankMiddle < 0) {
+            return;
+        }
+
+        for (float baseline : resultVisualBaseline) {
+            if (baseline < 0f) return;
+        }
+
+        float bestDelta = -999f;
+        float secondDelta = -999f;
+        int best = -1;
+        for (int i = 0; i < 3; i++) {
+            float delta = scores[i] - resultVisualBaseline[i];
+            if (delta > bestDelta) {
+                secondDelta = bestDelta;
+                bestDelta = delta;
+                best = i;
+            } else if (delta > secondDelta) {
+                secondDelta = delta;
+            }
+        }
+
+        if (best < 0
+                || bestDelta < RESULT_MIN_DELTA
+                || bestDelta - secondDelta < RESULT_MIN_MARGIN) {
+            return;
+        }
+
+        if (resultCandidate == best
+                && resultCandidateAt > 0L
+                && now - resultCandidateAt <= RESULT_CONFIRM_WINDOW_MS) {
+            resultCandidateHits++;
+        } else {
+            resultCandidate = best;
+            resultCandidateHits = 1;
+        }
+        resultCandidateAt = now;
+
+        EventLog.log(this, String.format(Locale.ROOT,
+                "RESULT_CANDIDATE | target=%s | delta=%.3f | margin=%.3f | hit=%d/%d",
+                TARGET_NAMES[best], bestDelta, bestDelta - secondDelta,
+                resultCandidateHits, RESULT_CONFIRM_FRAMES));
+
+        if (resultCandidateHits < RESULT_CONFIRM_FRAMES) return;
+
+        resultResolvedThisRound = true;
+        int nextMode = best == finalRankMiddle
+                ? StrategyModeStore.MIDDLE
+                : StrategyModeStore.EXTREMES;
+        int oldMode = StrategyModeStore.get(this);
+        strategyMode = nextMode;
+        StrategyModeStore.set(this, nextMode);
+
+        String role = best == finalRankMiddle ? "MIDDLE" : "EXTREME";
+        EventLog.log(this, "RESULT_CONFIRMED | target=" + TARGET_NAMES[best]
+                + " | role=" + role
+                + " | rankHigh=" + TARGET_NAMES[finalRankMax]
+                + " | rankMiddle=" + TARGET_NAMES[finalRankMiddle]
+                + " | rankLow=" + TARGET_NAMES[finalRankMin]);
+
+        if (oldMode != nextMode) {
+            EventLog.log(this, "MODE_SWITCH | " + StrategyModeStore.label(oldMode)
+                    + " -> " + StrategyModeStore.label(nextMode)
+                    + " | winner=" + TARGET_NAMES[best]);
+        } else {
+            EventLog.log(this, "MODE_KEEP | " + StrategyModeStore.label(nextMode)
+                    + " | winner=" + TARGET_NAMES[best]);
+        }
+    }
+
+    private float targetVisualScore(Bitmap bitmap, float centerX, float centerY) {
+        int w = bitmap.getWidth();
+        int h = bitmap.getHeight();
+        int left = clamp(Math.round(w * (centerX - 0.080f)), 0, w - 1);
+        int right = clamp(Math.round(w * (centerX + 0.080f)), left + 1, w);
+        int top = clamp(Math.round(h * (centerY - 0.015f)), 0, h - 1);
+        int bottom = clamp(Math.round(h * (centerY + 0.075f)), top + 1, h);
+
+        double total = 0d;
+        int count = 0;
+        for (int y = top; y < bottom; y += 4) {
+            for (int x = left; x < right; x += 4) {
+                int c = bitmap.getPixel(x, y);
+                int r = Color.red(c);
+                int g = Color.green(c);
+                int b = Color.blue(c);
+                int max = Math.max(r, Math.max(g, b));
+                int min = Math.min(r, Math.min(g, b));
+                double luma = (0.299d * r + 0.587d * g + 0.114d * b) / 255d;
+                double saturation = (max - min) / 255d;
+                total += luma * 0.65d + saturation * 0.35d;
+                count++;
+            }
+        }
+        return count == 0 ? 0f : (float) (total / count);
     }
 
     private float whiteInkRatio(Bitmap bitmap, float centerX, float centerY) {
