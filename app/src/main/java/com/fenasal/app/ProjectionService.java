@@ -82,6 +82,15 @@ public class ProjectionService extends Service {
     private static final long BALANCE_FRESH_MS = 2200L;
     private static final long BALANCE_VERIFY_TIMEOUT_MS = 2600L;
 
+    private static final int PHASE_UNKNOWN = 0;
+    private static final int PHASE_BETTING = 1;
+    private static final int PHASE_WHEEL = 2;
+    private static final int PHASE_BREAK = 3;
+    private static final int PHASE_RESULT = 4;
+    private static final long PHASE_CUE_HOLD_MS = 1800L;
+    private static final long ANCHOR_FRAME_GRACE_MS = 850L;
+    private static final long WHEEL_AFTER_ZERO_MS = 320L;
+
     private MediaProjection projection;
     private VirtualDisplay virtualDisplay;
     private ImageReader imageReader;
@@ -161,6 +170,12 @@ public class ProjectionService extends Service {
     private int balanceExpectedGestures;
     private String lastBalanceCheck = "YOK";
 
+    private int gamePhase = PHASE_UNKNOWN;
+    private long gamePhaseChangedAt;
+    private long lastBettingCueAt;
+    private long lastFullAnchorFrameAt;
+    private volatile String lastActionGestureEvidence = "NONE";
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -178,6 +193,7 @@ public class ProjectionService extends Service {
         balanceRecognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS);
         EventLog.log(this, "SERVICE_START | ProjectionService başladı");
         EventLog.log(this, "MODE_INIT | " + StrategyModeStore.label(strategyMode));
+        EventLog.log(this, "GAME_PHASE | UNKNOWN | service-start");
         TapAccessibilityService.updateOverlay("FENA • BAŞLIYOR\nEkran yakalama hazırlanıyor...");
     }
 
@@ -419,7 +435,9 @@ public class ProjectionService extends Service {
             }
         }
 
-        if (anchorsGeometryValid(foundX, foundY)) {
+        boolean anchorsThisFrame = anchorsGeometryValid(foundX, foundY);
+        if (anchorsThisFrame) {
+            lastFullAnchorFrameAt = now;
             float newY = (foundY[0] + foundY[1] + foundY[2]) / 3f;
             boolean changed = !anchorsLocked
                     || Math.abs(targetX[0] - foundX[0]) > 0.008f
@@ -445,15 +463,33 @@ public class ProjectionService extends Service {
                     "ANCHOR_FALLBACK | Etiketler henüz bulunamadı; geçici yedek koordinatlar kullanılıyor");
         }
 
-        if (frameCountdown != null) {
-            updateCountdown(frameCountdown, now, text.getText());
+        String rawFrameOcr = text.getText();
+        updateGamePhase(now, rawFrameOcr, anchorsThisFrame, frameCountdown);
+        boolean bettingPhase = gamePhase == PHASE_BETTING;
+        boolean trustedBetFrame = bettingPhase
+                && (anchorsThisFrame
+                    || (lastFullAnchorFrameAt > 0L
+                        && now - lastFullAnchorFrameAt <= ANCHOR_FRAME_GRACE_MS
+                        && lastBettingCueAt > 0L
+                        && now - lastBettingCueAt <= PHASE_CUE_HOLD_MS));
+
+        if (bettingPhase && frameCountdown != null) {
+            updateCountdown(frameCountdown, now, rawFrameOcr);
+        } else if (frameCountdown != null && !bettingPhase) {
+            EventLog.log(this, "OCR_IGNORED_PHASE | type=countdown | value=" + frameCountdown
+                    + " | phase=" + gamePhaseLabel(gamePhase));
         }
 
-        boolean anchorFreshForEmpty = anchorsLocked
+        boolean anchorFreshForEmpty = trustedBetFrame && anchorsLocked
                 && lastAnchorSeenAt > 0L
                 && now - lastAnchorSeenAt <= ANCHOR_FRESH_FOR_EMPTY_MS;
 
         for (int i = 0; i < 3; i++) {
+            if (!trustedBetFrame) {
+                emptyEvidence[i] = 0;
+                emptyEvidenceTimes[i] = 0L;
+                continue;
+            }
             if (frameValues[i] >= 0) {
                 emptyEvidence[i] = 0;
                 emptyEvidenceTimes[i] = 0L;
@@ -488,7 +524,8 @@ public class ProjectionService extends Service {
         // require ML Kit to physically catch the single frame that contains "1".
         // A recent genuine 2/3 plus the monotonic countdown estimate can confirm
         // the same final-second window when OCR is a little late.
-        if (!betPlaced
+        if (bettingPhase
+                && !betPlaced
                 && !oneSecondConfirmed
                 && lastCountdownObserved != null
                 && lastCountdownObserved >= 2
@@ -507,7 +544,9 @@ public class ProjectionService extends Service {
         int freshCount = 0;
         boolean[] fresh = new boolean[3];
         for (int i = 0; i < 3; i++) {
-            fresh[i] = lastValues[i] >= 0 && now - valueTimes[i] <= VALUE_FRESH_MS;
+            fresh[i] = bettingPhase
+                    && lastValues[i] >= 0
+                    && now - valueTimes[i] <= VALUE_FRESH_MS;
             if (fresh[i]) freshCount++;
         }
 
@@ -578,7 +617,7 @@ public class ProjectionService extends Service {
                 min >= 0 && lastEmpty[min],
                 displayValues,
                 remaining,
-                true,
+                bettingPhase,
                 false);
 
         boolean accessibility = TapAccessibilityService.isReady();
@@ -605,7 +644,8 @@ public class ProjectionService extends Service {
         }
         boolean strategyPass = spreadEnough && adjacentGapsEnough && latePlanStable;
 
-        if (!betPlaced
+        if (bettingPhase
+                && !betPlaced
                 && remaining >= 0d
                 && remaining <= 1.35d
                 && now - lastGateLogAt > 450L) {
@@ -623,7 +663,8 @@ public class ProjectionService extends Service {
                     accessibility ? "YES" : "NO"));
         }
 
-        if (!betPlaced
+        if (bettingPhase
+                && !betPlaced
                 && lastFive
                 && oneSecondConfirmed
                 && freshCount == 3
@@ -644,7 +685,8 @@ public class ProjectionService extends Service {
                     strategyPass ? "YES" : "NO"));
         }
 
-        if (!betPlaced
+        if (bettingPhase
+                && !betPlaced
                 && lastFive
                 && oneSecondConfirmed
                 && freshCount == 3
@@ -663,7 +705,8 @@ public class ProjectionService extends Service {
             oneSecondConfirmed = false;
         }
 
-        if (!betPlaced
+        if (bettingPhase
+                && !betPlaced
                 && lastFive
                 && oneSecondConfirmed
                 && freshCount == 3
@@ -691,7 +734,8 @@ public class ProjectionService extends Service {
             oneSecondConfirmed = false;
         }
 
-        if (!betPlaced
+        if (bettingPhase
+                && !betPlaced
                 && lastFive
                 && oneSecondConfirmed
                 && freshCount == 3
@@ -741,6 +785,11 @@ public class ProjectionService extends Service {
                             targetX[actionMiddle], tapY, TARGET_NAMES[actionMiddle],
                             ok -> {
                                 String outcome = ok ? "BET_OK" : "BET_FAILED";
+                                lastActionGestureEvidence = ok ? "GESTURE_OK_1" : "GESTURE_FAIL";
+                                EventLog.log(ProjectionService.this, "ACTION_EVIDENCE | stage=GESTURE"
+                                        + " | hand=" + roundNumber
+                                        + " | evidence=" + lastActionGestureEvidence
+                                        + " | plan=" + actionPlan);
                                 if (ok) {
                                     activateBalanceVerification(System.currentTimeMillis(), 1);
                                 } else {
@@ -767,6 +816,13 @@ public class ProjectionService extends Service {
                                     outcome = "BET_FAILED";
                                 }
                                 int acceptedGestures = (firstOk ? 1 : 0) + (secondOk ? 1 : 0);
+                                lastActionGestureEvidence = acceptedGestures == 2
+                                        ? "GESTURE_OK_2"
+                                        : acceptedGestures == 1 ? "GESTURE_PARTIAL_1" : "GESTURE_FAIL";
+                                EventLog.log(ProjectionService.this, "ACTION_EVIDENCE | stage=GESTURE"
+                                        + " | hand=" + roundNumber
+                                        + " | evidence=" + lastActionGestureEvidence
+                                        + " | plan=" + actionPlan);
                                 if (acceptedGestures > 0) {
                                     activateBalanceVerification(
                                             System.currentTimeMillis(), acceptedGestures);
@@ -791,6 +847,92 @@ public class ProjectionService extends Service {
         if (rawOcr == null) return false;
         String lower = rawOcr.toLowerCase(Locale.ROOT);
         return lower.contains("başla") || lower.contains("basla");
+    }
+
+    private boolean containsBreakCue(String rawOcr) {
+        if (rawOcr == null) return false;
+        String lower = rawOcr.toLowerCase(Locale.ROOT);
+        return lower.contains("ara ver")
+                || lower.contains("araver")
+                || lower.contains("ara  ver");
+    }
+
+    private void updateGamePhase(
+            long now, String rawOcr, boolean anchorsThisFrame, Integer frameCountdown) {
+        boolean startCue = containsStartCue(rawOcr);
+        boolean breakCue = containsBreakCue(rawOcr);
+
+        if (startCue) {
+            lastBettingCueAt = now;
+            setGamePhase(PHASE_BETTING, now, "START_CUE");
+            return;
+        }
+
+        if (breakCue) {
+            setGamePhase(resultResolvedThisRound ? PHASE_RESULT : PHASE_BREAK,
+                    now, "BREAK_CUE");
+            return;
+        }
+
+        if (gamePhase == PHASE_UNKNOWN
+                && anchorsThisFrame
+                && frameCountdown != null
+                && frameCountdown >= 1
+                && frameCountdown <= 30) {
+            lastBettingCueAt = now;
+            setGamePhase(PHASE_BETTING, now, "ANCHORS_COUNTDOWN_SYNC");
+            return;
+        }
+
+        if (gamePhase == PHASE_BETTING) {
+            double remaining = estimatedRemaining(now);
+            boolean countdownFinished = remaining >= 0d
+                    && remaining <= 0.05d
+                    && lastCountdownObservedAt > 0L
+                    && now - lastCountdownObservedAt >= WHEEL_AFTER_ZERO_MS;
+            boolean uiCoveredAfterEnd = !anchorsThisFrame
+                    && lastFullAnchorFrameAt > 0L
+                    && now - lastFullAnchorFrameAt > ANCHOR_FRAME_GRACE_MS
+                    && remaining >= 0d
+                    && remaining <= 0.30d;
+            if (countdownFinished || uiCoveredAfterEnd) {
+                setGamePhase(PHASE_WHEEL, now,
+                        countdownFinished ? "COUNTDOWN_FINISHED" : "BET_UI_COVERED");
+            }
+        }
+    }
+
+    private void setGamePhase(int next, long now, String reason) {
+        if (gamePhase == next) return;
+        int previous = gamePhase;
+        gamePhase = next;
+        gamePhaseChangedAt = now;
+
+        EventLog.log(this, "GAME_PHASE | " + gamePhaseLabel(previous)
+                + " -> " + gamePhaseLabel(next)
+                + " | reason=" + reason
+                + " | hand=" + roundNumber
+                + " | balance=" + formatAmount(lastBalance)
+                + " | gesture=" + lastActionGestureEvidence);
+
+        if (previous == PHASE_BETTING && next != PHASE_BETTING) {
+            EventLog.log(this, "BETTING_CLOSED | hand=" + roundNumber
+                    + " | finalValues=" + formatAmount(lastValues[0])
+                    + "," + formatAmount(lastValues[1])
+                    + "," + formatAmount(lastValues[2])
+                    + " | action=" + roundOutcome
+                    + " | balanceCheck=" + lastBalanceCheck);
+        }
+    }
+
+    private String gamePhaseLabel(int phase) {
+        switch (phase) {
+            case PHASE_BETTING: return "BAHİS AÇIK";
+            case PHASE_WHEEL: return "ÇARK DÖNÜYOR";
+            case PHASE_BREAK: return "ARA/SONUÇ BEKLİYOR";
+            case PHASE_RESULT: return "SONUÇ";
+            default: return "BİLİNMİYOR";
+        }
     }
 
     private void updateCountdown(int value, long now, String rawOcr) {
@@ -940,6 +1082,8 @@ public class ProjectionService extends Service {
         resultCandidateHits = 0;
         resultCandidateAt = 0L;
         resultResolvedThisRound = false;
+        lastActionGestureEvidence = "NONE";
+        lastBalanceCheck = "YOK";
         lastPlan = "";
         lastLoggedValues[0] = -999d;
         lastLoggedValues[1] = -999d;
@@ -969,6 +1113,7 @@ public class ProjectionService extends Service {
             float[] inkRatios,
             String rawOcr) {
 
+        if (gamePhase != PHASE_BETTING) return;
         if (roundStartedAt <= 0L || countdown == null) return;
         if (countdown == lastRoundSnapshotSecond) return;
         lastRoundSnapshotSecond = countdown;
@@ -1047,7 +1192,8 @@ public class ProjectionService extends Service {
                 "ROUND_SUMMARY | hand=%d | duration=%.2fs | action=%s | plan=%s"
                         + " | actionValues=%s,%s,%s | actionSpread=%s"
                         + " | finalValues=%s,%s,%s | lastCountdown=%s"
-                        + " | a11y=%s | end=%s",
+                        + " | a11y=%s | phase=%s | balance=%s | balanceCheck=%s"
+                        + " | gesture=%s | end=%s",
                 roundNumber,
                 (now - roundStartedAt) / 1000d,
                 action,
@@ -1061,6 +1207,10 @@ public class ProjectionService extends Service {
                 formatAmount(lastValues[2]),
                 lastCountdownObserved == null ? "?" : String.valueOf(lastCountdownObserved),
                 TapAccessibilityService.isReady() ? "ON" : "OFF",
+                gamePhaseLabel(gamePhase),
+                formatAmount(lastBalance),
+                lastBalanceCheck,
+                lastActionGestureEvidence,
                 reason));
         roundStartedAt = 0L;
     }
@@ -1156,6 +1306,7 @@ public class ProjectionService extends Service {
         if (middle >= 0 && strategyMode == StrategyModeStore.MIDDLE) {
             sb.append("\n").append(TARGET_NAMES[middle]).append("  ◆ ORTA");
         }
+        sb.append("\nAŞAMA: ").append(gamePhaseLabel(gamePhase));
         sb.append("\nMOD: ").append(StrategyModeStore.label(strategyMode));
         sb.append("\nPLAN: ").append(plan);
         sb.append("\nBAKİYE: ")
@@ -1318,6 +1469,10 @@ public class ProjectionService extends Service {
                     + " | gestures=" + balanceExpectedGestures);
             balanceVerifyPending = false;
             lastBalanceCheck = "ONAY";
+            EventLog.log(this, "ACTION_EVIDENCE | stage=BALANCE | hand=" + roundNumber
+                    + " | confidence=HIGH | gesture=" + lastActionGestureEvidence
+                    + " | balance=DROP | drop=" + formatAmount(drop)
+                    + " | phase=" + gamePhaseLabel(gamePhase));
             return;
         }
 
@@ -1346,6 +1501,12 @@ public class ProjectionService extends Service {
                     + " | delta=" + formatSignedAmount(lastBalance - balanceBeforeBet));
             lastBalanceCheck = "ARTTI";
         }
+        String confidence = "DEĞİŞMEDİ".equals(lastBalanceCheck) ? "LOW" : "UNCERTAIN";
+        EventLog.log(this, "ACTION_EVIDENCE | stage=BALANCE | hand=" + roundNumber
+                + " | confidence=" + confidence
+                + " | gesture=" + lastActionGestureEvidence
+                + " | balanceCheck=" + lastBalanceCheck
+                + " | phase=" + gamePhaseLabel(gamePhase));
         balanceVerifyPending = false;
     }
 
@@ -1364,7 +1525,7 @@ public class ProjectionService extends Service {
     private void observeVisualResult(long now, double remaining, float[] scores) {
         if (!anchorsLocked || scores == null || scores.length != 3) return;
 
-        if (remaining > 2.5d) {
+        if (gamePhase == PHASE_BETTING && remaining > 2.5d) {
             for (int i = 0; i < 3; i++) {
                 if (resultVisualBaseline[i] < 0f) {
                     resultVisualBaseline[i] = scores[i];
@@ -1378,6 +1539,7 @@ public class ProjectionService extends Service {
         }
 
         if (resultResolvedThisRound
+                || (gamePhase != PHASE_BREAK && gamePhase != PHASE_RESULT)
                 || remaining < 0d
                 || remaining > 0.05d
                 || finalRankMax < 0
@@ -1428,6 +1590,7 @@ public class ProjectionService extends Service {
         if (resultCandidateHits < RESULT_CONFIRM_FRAMES) return;
 
         resultResolvedThisRound = true;
+        setGamePhase(PHASE_RESULT, now, "RESULT_VISUAL_CONFIRMED");
         int nextMode = best == finalRankMiddle
                 ? StrategyModeStore.MIDDLE
                 : StrategyModeStore.EXTREMES;
@@ -1657,6 +1820,7 @@ public class ProjectionService extends Service {
         if (virtualDisplay != null) virtualDisplay.release();
         if (projection != null) projection.stop();
         if (recognizer != null) recognizer.close();
+        if (balanceRecognizer != null) balanceRecognizer.close();
         if (balanceRecognizer != null) balanceRecognizer.close();
         if (captureThread != null) captureThread.quitSafely();
         super.onDestroy();
