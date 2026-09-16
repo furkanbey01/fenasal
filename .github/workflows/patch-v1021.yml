@@ -1,0 +1,46 @@
+name: Apply v1.0.21 dual mode
+
+on:
+  push:
+    branches: [ "fena-v1.0.21-dual-mode" ]
+    paths:
+      - '.github/workflows/patch-v1021.yml'
+      - 'tools/patch_v1021.py'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: fena-v1.0.21-dual-mode
+
+      - name: Apply patch
+        run: python tools/patch_v1021.py
+
+      - name: Verify markers
+        run: |
+          grep -q 'StrategyModeStore.MIDDLE' app/src/main/java/com/fenasal/app/ProjectionService.java
+          grep -q 'MODE_SWITCH' app/src/main/java/com/fenasal/app/ProjectionService.java
+          grep -q 'tapSingle' app/src/main/java/com/fenasal/app/TapAccessibilityService.java
+          grep -q 'modeButton' app/src/main/java/com/fenasal/app/MainActivity.java
+          grep -q 'versionCode 21' app/build.gradle
+          grep -q "versionName '1.0.21'" app/build.gradle
+
+      - name: Commit app changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/fenasal/app/ProjectionService.java \
+                  app/src/main/java/com/fenasal/app/TapAccessibilityService.java \
+                  app/src/main/java/com/fenasal/app/TargetOverlayView.java \
+                  app/src/main/java/com/fenasal/app/MainActivity.java \
+                  app/src/main/res/layout/activity_main.xml \
+                  app/build.gradle
+          git diff --cached --check
+          git commit -m "Add adaptive dual strategy modes"
+          git push origin HEAD:fena-v1.0.21-dual-mode
